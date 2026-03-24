@@ -20,8 +20,8 @@ policy:
   checkpoint_path: path/to/dppo/checkpoint.pt
   params:
     repo_path: external/dsrl/dppo
-    config_path: configs/training/dppo_pretrain_0108_v0_success.yaml
-    normalization_path: data/dppo_processed/0108_v0_success/normalization.npz
+    config_path: configs/training/your_dataset.yaml
+    normalization_path: data/dppo_processed/your_dataset/normalization.npz
     ordered_obs_keys: ["joint_positions", "gripper_position"]
     view_names: ["wrist", "exterior_right"]
     stacked_view_order: [exterior_left, exterior_right, wrist]

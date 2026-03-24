@@ -42,9 +42,7 @@ reward_model:
 scheduler:
   chunk_size: 15
 
-# Duration of the rollout in seconds.  At 15 Hz action frequency and
-# chunk_size 15, each second produces one world-model call (5 frames).
 duration: 10
 action_hz: 15
-video_dir: outputs/irom_test_carrot_openpi_videos_4
+video_dir: outputs/irom_test_carrot_openpi_videos
 dataset_path: data/evaluation_suites/irom_test_carrot
