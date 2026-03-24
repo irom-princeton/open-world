@@ -20,11 +20,11 @@ Each test case requires the following input:
 
 We provide an example test suite for the droid setup at [data/evaluation_suites/irom_test_carrot](data/evaluation_suites/irom_test_carrot). Feel free to create your own!
 
-## Preparing an Policy
+## Preparing a Policy
 
-Follow [TRAIN_POLICY.md](TRAIN_POLICY.md) for instructions on 
+Follow [TRAIN_POLICY.md](TRAIN_POLICY.md) for instructions on training or loading existing policy checkpoints.
 
-## Setting up Reward Function
+## Setting up a Reward Function
 
 ```bash
 # Robometer
