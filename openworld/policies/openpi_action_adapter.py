@@ -199,9 +199,28 @@ class OpenPIActionAdapter:
 
         env_actions = []
         for index in range(joint_pos.shape[0]):
-            fk = get_fk_solution(joint_pos[index, :7])
+            joints = joint_pos[index, :7]
+            if not np.all(np.isfinite(joints)):
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Non-finite joint values at step %d (likely policy divergence): %s",
+                    index, joints,
+                )
+                joints = np.nan_to_num(joints, nan=0.0, posinf=0.0, neginf=0.0)
+
+            fk = get_fk_solution(joints)
             xyz = fk[:3, 3]
             rotation_matrix = fk[:3, :3]
+
+            if not np.all(np.isfinite(rotation_matrix)):
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Non-finite FK rotation at step %d; substituting identity. joints=%s",
+                    index, joints,
+                )
+                rotation_matrix = np.eye(3)
+                xyz = np.nan_to_num(xyz, nan=0.0, posinf=0.0, neginf=0.0)
+
             euler = R.from_matrix(rotation_matrix).as_euler("xyz")
             env_actions.append(np.concatenate([xyz, euler, gripper_pos[index]], axis=0))
 

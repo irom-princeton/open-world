@@ -54,6 +54,14 @@ policy:
     add_value_head: true
     value_hidden_dim: 512
 
+# --- Action adapter (joint velocities → Cartesian via dynamics model + FK) ---
+# Must match the eval path so the world model receives correct actions.
+action_adapter:
+  checkpoint_path: checkpoints/action_adapter/model2_15_9.pth
+  gripper_max: 1.0
+  policy_skip_step: 2    # subsample adapted actions (matches eval configs)
+  # device: cpu          # defaults to cuda if available
+
 # --- Reward model (Robometer via subprocess) ---
 reward_model:
   robometer_dir: external/robometer
@@ -74,7 +82,7 @@ ppo:
   vf_coef: 0.5
   entropy_coef: 0.01
   max_grad_norm: 1.0
-  num_epochs: 4
+  num_epochs: 1
   mini_batch_size: 8
   gamma: 0.99
   gae_lambda: 0.95
@@ -83,9 +91,9 @@ ppo:
 
 # --- Training loop ---
 training:
-  max_chunks_per_episode: 2 #10
-  episodes_per_iter: 1 #4
-  num_iterations: 100
+  max_chunks_per_episode: 15
+  episodes_per_iter: 4
+  num_iterations: 200
   checkpoint_dir: models/rl_finetune/pi0_droid
   checkpoint_every: 10
   log_every: 1

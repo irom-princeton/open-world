@@ -46,7 +46,7 @@ reward_model:
 scheduler:
   chunk_size: 5
 
-duration: 10
+duration: 15
 action_hz: 5
-video_dir: outputs/0404_banana
-dataset_path: data/benchmark/irom_test_nanobanana
+video_dir: outputs/0415_test_carrot
+dataset_path: data/benchmark/irom_test_carrot

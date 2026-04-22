@@ -86,6 +86,8 @@ def _pipe_stderr(proc: subprocess.Popen) -> None:
         "processor_class",
         "image_processor",
         "video_processor",
+        "| DEBUG",
+        "compute_batch_outputs",
     )
     for line in proc.stderr:
         line = line.rstrip("\n")
@@ -163,7 +165,7 @@ class RobometerRewardScorer:
         )
 
         cmd = [
-            "uv", "run", "python", str(_SCORER_SCRIPT),
+            "uv", "run", "--frozen", "python", str(_SCORER_SCRIPT),
             "--server",
             "--model-path", model_path,
             "--fps", str(fps),
@@ -175,6 +177,13 @@ class RobometerRewardScorer:
         # Disable unsloth telemetry/stats which tries to download from
         # huggingface.co and fails on compute nodes without internet.
         env.setdefault("UNSLOTH_DISABLE_STATISTICS", "1")
+        # Force offline mode so that transformers/HF Hub only read from
+        # the local cache.  Without this, AutoConfig.from_pretrained
+        # tries to contact HuggingFace, times out on offline compute
+        # nodes, and silently returns None — causing unsloth to error
+        # with "No config file found".
+        env.setdefault("HF_HUB_OFFLINE", "1")
+        env.setdefault("TRANSFORMERS_OFFLINE", "1")
 
         logger.info(
             "Starting Robometer server (gpu=%s): cd %s && %s",
@@ -308,7 +317,7 @@ class RobometerRewardScorer:
             instruction = ep.get("instruction", "")
 
             video_path = tmp_dir / f"{ep_id}.mp4"
-            self._save_frames_as_video(frames, str(video_path))
+            self._save_frames_as_video(frames, str(video_path), fps=self.fps)
 
             manifest_entries.append({
                 "id": ep_id,
@@ -361,7 +370,7 @@ class RobometerRewardScorer:
     def _save_frames_as_video(
         frames: np.ndarray,
         path: str,
-        fps: float = 10.0,
+        fps: float = 2.0,
     ) -> None:
         """Save a (T, H, W, C) uint8 array as an MP4 video."""
         try:

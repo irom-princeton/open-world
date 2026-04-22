@@ -21,9 +21,11 @@ from typing import Any, Optional
 import jax
 import jax.numpy as jnp
 import numpy as np
+from tqdm import tqdm
 
 from openworld.datasets.initialization_dataset import InitializationDataset
 from openworld.envs.world_model_env import WorldModelEnv
+from openworld.policies.openpi_action_adapter import AdaptedActionChunk, OpenPIActionAdapter
 from openworld.training.openpi_trainable import TrainablePi0
 from openworld.training.ppo import PPOConfig, PPOTrainer
 from openworld.training.reward_scorer import (
@@ -58,6 +60,11 @@ class RLFineTuneRunner:
         wandb_run_name: str | None = None,
         wandb_config: dict[str, Any] | None = None,
         rng_seed: int = 42,
+        action_adapter_checkpoint_path: str | None = None,
+        action_adapter_gripper_max: float = 1.0,
+        action_adapter_device: str | None = None,
+        policy_skip_step: int = 1,
+        num_action_steps: int | None = None,
     ):
         """
         Args:
@@ -100,10 +107,25 @@ class RLFineTuneRunner:
 
         # Action denormalization stats (Pi0 DROID z-score normalization).
         # Pi0 outputs actions in a normalized space: (x - mean) / (std + eps).
-        # We must denormalize before passing to the world model, which
-        # expects physical robot actions.
+        # We must denormalize before passing to the action adapter.
         self._action_norm_mean: np.ndarray | None = None
         self._action_norm_std: np.ndarray | None = None
+
+        # State normalization stats.  The eval path normalizes state via the
+        # Normalize input transform before it reaches the model.  We must do
+        # the same during training.
+        self._state_norm_mean: np.ndarray | None = None
+        self._state_norm_std: np.ndarray | None = None
+
+        # Action adapter: converts raw Pi0 outputs (joint velocities)
+        # to Cartesian actions via a learned dynamics model + FK,
+        # matching the evaluation path (OpenPIPolicy._adapt_action_chunk).
+        self._action_adapter_checkpoint_path = action_adapter_checkpoint_path
+        self._action_adapter_gripper_max = action_adapter_gripper_max
+        self._action_adapter_device = action_adapter_device
+        self._policy_skip_step = policy_skip_step
+        self._num_action_steps = num_action_steps
+        self._action_adapter: OpenPIActionAdapter | None = None
 
         # wandb setup
         self._wandb_run = None
@@ -134,33 +156,107 @@ class RLFineTuneRunner:
             self._action_norm_mean[:8], self._action_norm_std[:8],
         )
 
-    def _denormalize_actions(self, actions: np.ndarray) -> np.ndarray:
-        """Denormalize Pi0 actions from model space to physical deltas.
+    def set_state_norm_stats(
+        self, mean: np.ndarray, std: np.ndarray
+    ) -> None:
+        """Set z-score normalization statistics for the state input.
 
-        Applies ``x * (std + eps) + mean`` and slices to the physical
-        action dimensions (first ``action_env_dim`` dims).
+        The eval path normalizes the state via the ``Normalize`` transform
+        before it reaches the model.  The training path must do the same.
+
+        Args:
+            mean: Per-dimension mean, shape ``(state_dim,)`` (e.g. 32).
+            std: Per-dimension std, shape ``(state_dim,)`` (e.g. 32).
+        """
+        self._state_norm_mean = np.asarray(mean, dtype=np.float32)
+        self._state_norm_std = np.asarray(std, dtype=np.float32)
+        logger.info(
+            "State norm stats set: mean[:8]=%s, std[:8]=%s",
+            self._state_norm_mean[:8], self._state_norm_std[:8],
+        )
+
+    def _normalize_state(self, state: np.ndarray) -> np.ndarray:
+        """Normalize state from physical space to model space.
+
+        Applies ``(x - mean) / (std + eps)`` to match the eval path's
+        ``Normalize`` input transform.
+        """
+        if self._state_norm_mean is None or self._state_norm_std is None:
+            return state
+        eps = 1e-6
+        mean = self._state_norm_mean[: state.shape[-1]]
+        std = self._state_norm_std[: state.shape[-1]]
+        return (state - mean) / (std + eps)
+
+    def _denormalize_actions(self, actions: np.ndarray) -> np.ndarray:
+        """Denormalize Pi0 actions from model space to physical space.
+
+        Applies ``x * (std + eps) + mean``.  Returns the full
+        denormalized array — the action adapter will extract the
+        dimensions it needs (joint velocities + gripper).
 
         Args:
             actions: Normalized actions, shape ``(horizon, model_action_dim)``.
 
         Returns:
-            Physical action deltas, shape ``(horizon, action_env_dim)``.
+            Physical actions, shape ``(horizon, model_action_dim)``.
         """
         if self._action_norm_mean is None or self._action_norm_std is None:
             logger.warning(
-                "Action norm stats not set — passing raw actions to world model. "
+                "Action norm stats not set — passing raw actions to adapter. "
                 "Call set_action_norm_stats() to fix this."
             )
-            ed = self.policy.config.action_env_dim
-            return actions[:, :ed]
+            return actions
 
         eps = 1e-6
         mean = self._action_norm_mean[: actions.shape[-1]]
         std = self._action_norm_std[: actions.shape[-1]]
         denormed = actions * (std + eps) + mean
-        ed = self.policy.config.action_env_dim
-        return denormed[:, :ed]
+        return denormed
 
+    def _get_action_adapter(self) -> OpenPIActionAdapter:
+        """Lazily create the action adapter (matches eval path)."""
+        if self._action_adapter is None:
+            if self._action_adapter_checkpoint_path is None:
+                raise RuntimeError(
+                    "Action adapter checkpoint path not set. "
+                    "Set action_adapter.checkpoint_path in the config."
+                )
+            self._action_adapter = OpenPIActionAdapter(
+                checkpoint_path=self._action_adapter_checkpoint_path,
+                gripper_max=self._action_adapter_gripper_max,
+                device=self._action_adapter_device,
+            )
+        return self._action_adapter
+
+    def _extract_joint_state(
+        self, env_info: dict[str, Any]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Extract joint position and gripper position from env state.
+
+        Matches the eval path (``OpenPIPolicy._extract_joint_state``).
+        Always reads ``joint_position`` / ``gripper_position``, never
+        ``robot["state"]`` (which may hold Cartesian positions after
+        the first step).
+        """
+        state = env_info["state"]
+        if isinstance(state, dict):
+            robot = state.get("robot", {})
+            if isinstance(robot, dict):
+                joint_pos = robot.get(
+                    "joint_position", robot.get("joint_positions")
+                )
+                gripper_pos = robot.get("gripper_position")
+                if joint_pos is not None and gripper_pos is not None:
+                    return (
+                        np.asarray(joint_pos, dtype=np.float32).reshape(-1),
+                        np.asarray(gripper_pos, dtype=np.float32).reshape(-1),
+                    )
+        raise RuntimeError(
+            "Cannot extract joint/gripper state from env info. "
+            "Ensure the initialization provides joint_position and "
+            "gripper_position in state['robot']."
+        )
 
     # ------------------------------------------------------------------
     # wandb
@@ -389,10 +485,32 @@ class RLFineTuneRunner:
             metrics["reward/min"] = float(np.min(ep_rewards))
             metrics["reward/max"] = float(np.max(ep_rewards))
             metrics["reward/std"] = float(np.std(ep_rewards))
-            metrics["reward/per_chunk_mean"] = float(
-                np.mean([t.reward for t in buffer.transitions])
+            chunk_rewards = np.array([t.reward for t in buffer.transitions])
+            metrics["reward/per_chunk_mean"] = float(np.mean(chunk_rewards))
+            metrics["reward/per_chunk_std"] = float(np.std(chunk_rewards))
+
+            # Return / advantage / value distributions — diagnose PPO signal.
+            returns = buffer.returns
+            advantages = buffer.advantages  # raw (pre-normalization)
+            old_values = np.array(
+                [t.value for t in buffer.transitions], dtype=np.float32
             )
-            metrics["return/mean"] = float(np.mean(buffer.returns))
+            metrics["return/mean"] = float(np.mean(returns))
+            metrics["return/std"] = float(np.std(returns))
+            metrics["return/min"] = float(np.min(returns))
+            metrics["return/max"] = float(np.max(returns))
+            metrics["advantage/mean"] = float(np.mean(advantages))
+            metrics["advantage/std"] = float(np.std(advantages))
+            metrics["advantage/min"] = float(np.min(advantages))
+            metrics["advantage/max"] = float(np.max(advantages))
+            metrics["advantage/abs_mean"] = float(np.mean(np.abs(advantages)))
+            metrics["value/old_mean"] = float(np.mean(old_values))
+            metrics["value/old_std"] = float(np.std(old_values))
+
+            # Exploration noise level (tracks noise_anneal schedule).
+            metrics["noise_level"] = float(
+                getattr(self.policy, "_current_noise_level", 0.0)
+            )
 
             # Console logging
             if iteration % self.log_every == 0:
@@ -487,8 +605,11 @@ class RLFineTuneRunner:
         chunks = []
         all_frames = []
 
-        for chunk_idx in range(self.max_chunks_per_episode):
-            logger.info("  Chunk %d/%d", chunk_idx + 1, self.max_chunks_per_episode)
+        for chunk_idx in tqdm(
+            range(self.max_chunks_per_episode),
+            desc="  Chunks",
+            leave=False,
+        ):
             rng, act_rng = jax.random.split(rng)
 
             # Build observation for the policy
@@ -505,52 +626,67 @@ class RLFineTuneRunner:
                 observation=self._observation_to_numpy(observation),
                 chains=np.asarray(result["chains"][0]),      # [S+1, H, D]
                 denoise_ind=int(result["denoise_inds"][0]),
-                log_prob=np.asarray(result["log_probs"][0]), # [ac, ed]
+                log_prob=np.asarray(result["log_probs"][0]), # [action_horizon, ed]
                 value=float(result["values"][0]),
                 instruction=instruction,
             )
             chunks.append(chunk_transition)
 
-            # Execute actions in the environment one at a time.
-            # The policy produces action_horizon actions, but the env's
-            # ActionChunkScheduler needs chunk_size actions (e.g. 15)
-            # before triggering a world model rollout.
-            #
-            # Pi0 outputs actions in its normalized internal space (32-dim).
-            # We must denormalize to physical robot actions before feeding
-            # them to the world model.
+            # Execute actions in the environment, matching the eval path
+            # (OpenPIPolicy._adapt_action_chunk):
+            # 1. Denormalize Pi0 outputs from z-score space to physical
+            #    space (joint velocities + gripper).
+            # 2. Pass through the action adapter which uses a learned
+            #    dynamics model + Franka Panda FK to convert joint
+            #    velocities → Cartesian positions (xyz + euler + gripper).
+            # 3. Step env with adapted actions and full state updates
+            #    (joint_position, gripper_position, cartesian_position).
             raw_actions = np.asarray(result["actions"][0])  # [action_horizon, 32]
-            deltas = self._denormalize_actions(raw_actions)  # [action_horizon, action_env_dim]
+            denormed = self._denormalize_actions(raw_actions)  # [action_horizon, 32]
 
-            # Convert deltas to absolute Cartesian positions.
-            # The world model expects absolute robot state vectors (not
-            # deltas) as its action conditioning.  We integrate deltas
-            # from the current state, and wrap each step in a dict so
-            # that WorldModelEnv._advance_policy_state correctly sets
-            # robot["state"] to the absolute position (matching the
-            # evaluation path's action adapter output format).
-            current_state = info["state"]
-            robot = current_state.get("robot", {}) if isinstance(current_state, dict) else {}
-            base_pos = np.asarray(robot.get("state", np.zeros(deltas.shape[-1])),
-                                  dtype=np.float32).reshape(-1)
-            ed = deltas.shape[-1]
-            base_pos = base_pos[:ed].copy()
+            # Get current joint/gripper state for the action adapter
+            joint_position, gripper_position = self._extract_joint_state(info)
+
+            # Adapt through the action adapter (joint vel → Cartesian).
+            # The adapter's dynamics model expects exactly action_num (15)
+            # timesteps, but Pi0's action_horizon may be larger (e.g. 50).
+            # Truncate to match, same as the eval path.
+            adapter = self._get_action_adapter()
+            denormed_chunk = denormed[: adapter.action_num]
+            adapted = adapter.adapt(
+                joint_position, gripper_position, denormed_chunk
+            )
+
+            # Optionally subsample to match world model temporal resolution
+            if self._policy_skip_step > 1:
+                indices = list(range(
+                    0, adapted.env_actions.shape[0], self._policy_skip_step
+                ))
+                if self._num_action_steps is not None:
+                    indices = indices[: self._num_action_steps]
+                adapted = AdaptedActionChunk(
+                    env_actions=adapted.env_actions[indices],
+                    joint_positions=adapted.joint_positions[indices],
+                    gripper_positions=adapted.gripper_positions[indices],
+                )
 
             chunk_size = self.env.scheduler.chunk_size
-            num_steps = min(chunk_size, deltas.shape[0])
+            num_steps = min(chunk_size, adapted.env_actions.shape[0])
 
             for step_idx in range(num_steps):
-                base_pos = base_pos + deltas[step_idx]
-                # Pack as a dict matching the evaluation path's format
-                # so _advance_policy_state and _extract_env_action work
-                # correctly: env_action is the absolute position,
-                # state_update sets robot.state to the absolute position.
+                cartesian_action = adapted.env_actions[step_idx]
+                next_joint = adapted.joint_positions[step_idx]
+                next_gripper = adapted.gripper_positions[step_idx]
                 action_dict = {
-                    "env_action": base_pos.copy(),
+                    "env_action": cartesian_action,
                     "state_update": {
                         "robot": {
                             "state_representation": "cartesian_position_with_gripper",
-                            "state": base_pos.copy(),
+                            "state": cartesian_action,
+                            "cartesian_position": cartesian_action[:6],
+                            "joint_position": next_joint,
+                            "joint_positions": next_joint,
+                            "gripper_position": next_gripper,
                         }
                     },
                 }
@@ -588,12 +724,10 @@ class RLFineTuneRunner:
         state = env_info["state"]
 
         # Extract image views.
-        # The world model returns a single concatenated frame with all
-        # camera views side-by-side (e.g. 192x960 for 3 views at 320px).
-        # Split it back into individual views using the configured
-        # view_order so that each view has a consistent shape across
-        # the initial observation (from the dataset, already per-view)
-        # and subsequent observations (from the world model).
+        # The world model returns a single frame with all camera views
+        # stacked vertically (e.g. 576x320 for 3 views at 192x320).
+        # Split it back into individual views along the height axis
+        # using the configured view_order.
         if isinstance(obs, dict) and "views" in obs:
             views = obs["views"]
         elif isinstance(obs, dict):
@@ -604,16 +738,21 @@ class RLFineTuneRunner:
             view_order = getattr(wm_config, "view_order", None)
             n_views = len(view_order) if view_order else 1
             if obs_arr.ndim == 3 and n_views > 1:
-                W = obs_arr.shape[1]
-                view_w = W // n_views
+                H = obs_arr.shape[0]
+                view_h = H // n_views
                 views = {
-                    name: obs_arr[:, i * view_w : (i + 1) * view_w, :]
+                    name: obs_arr[i * view_h : (i + 1) * view_h, :, :]
                     for i, name in enumerate(view_order)
                 }
             else:
                 views = {"base_0_rgb": obs_arr}
 
-        # Prepare images as float32 [-1, 1]
+        # Prepare images as float32 [-1, 1], matching the eval path
+        # (OpenPIPolicy._prepare_image → DroidInputs → Observation.from_dict).
+        # Critical: use resize_with_pad (aspect-ratio-preserving + black padding)
+        # instead of stretching to 224x224, which distorts the image.
+        from openpi.shared import image_tools as _image_tools
+
         images = {}
         image_masks = {}
         for key_name, target_key in [
@@ -631,34 +770,70 @@ class RLFineTuneRunner:
                 from PIL import Image
                 img = np.asarray(Image.open(img).convert("RGB"))
             img = np.asarray(img)
-            if img.dtype == np.uint8:
-                img = img.astype(np.float32) / 255.0 * 2.0 - 1.0
+            # Keep as uint8 for now — convert to [-1, 1] after resize_with_pad
+            # to match the eval path (resize in pixel space, then normalize).
+            if np.issubdtype(img.dtype, np.floating):
+                img = np.clip(img * 255.0, 0, 255).astype(np.uint8) if img.max() <= 1.0 else np.clip(img, 0, 255).astype(np.uint8)
             if img.ndim == 3:
                 img = img[np.newaxis]  # add batch dim
-            images[target_key] = jnp.asarray(img)
+            # Resize using pad-to-square (preserves aspect ratio) to match eval.
+            if img.shape[-3:-1] != (224, 224):
+                img = _image_tools.resize_with_pad(jnp.asarray(img), 224, 224)
+            # Convert to float32 [-1, 1]
+            if img.dtype == np.uint8 or img.dtype == jnp.uint8:
+                img = jnp.asarray(img, dtype=jnp.float32) / 255.0 * 2.0 - 1.0
+            else:
+                img = jnp.asarray(img, dtype=jnp.float32)
+            images[target_key] = img
             image_masks[target_key] = jnp.ones((img.shape[0],), dtype=jnp.bool_)
 
-        # Add a third image view (right wrist) — duplicate if not available
+        # Add a third image view (right wrist) — use zeros with mask=False
+        # to match the eval path (DroidInputs uses np.zeros + np.False_).
         right_key = "right_wrist_0_rgb"
         if right_key not in images:
-            images[right_key] = images["left_wrist_0_rgb"]
-            image_masks[right_key] = image_masks["left_wrist_0_rgb"]
+            img_shape = images["left_wrist_0_rgb"].shape
+            # Zeros in [-1, 1] space means -1.0 (black)
+            images[right_key] = jnp.full(img_shape, -1.0, dtype=jnp.float32)
+            image_masks[right_key] = jnp.zeros((img_shape[0],), dtype=jnp.bool_)
 
-        # Extract state vector
+        # Extract state vector — always use joint_position + gripper_position
+        # to match the eval path (OpenPIPolicy._build_state_inputs).
+        # Never fall back to robot["state"] which may hold Cartesian
+        # positions after the first env step, breaking the policy's
+        # expected input format.
         if isinstance(state, dict):
             robot = state.get("robot", {})
-            state_vec = robot.get(
-                "state",
-                robot.get("joint_position", np.zeros(self.policy.config.action_dim)),
+            joint_pos = robot.get(
+                "joint_position", robot.get("joint_positions")
             )
+            gripper_pos = robot.get("gripper_position")
+            if joint_pos is not None:
+                jp = np.asarray(joint_pos, dtype=np.float32).reshape(-1)
+                if gripper_pos is not None:
+                    gp = np.asarray(gripper_pos, dtype=np.float32).reshape(-1)
+                    state_vec_np = np.concatenate([jp, gp])
+                else:
+                    state_vec_np = jp
+            else:
+                state_vec_np = np.zeros(
+                    self.policy.config.action_dim, dtype=np.float32
+                )
         else:
-            state_vec = state if state is not None else np.zeros(
-                self.policy.config.action_dim
+            state_vec_np = (
+                np.asarray(state, dtype=np.float32).reshape(-1)
+                if state is not None
+                else np.zeros(self.policy.config.action_dim, dtype=np.float32)
             )
-        state_vec = jnp.asarray(
-            np.asarray(state_vec, dtype=np.float32).reshape(1, -1)
-        )
-        # Pad or truncate state to action_dim
+        # Normalize state to match the eval path.
+        # The eval pipeline applies Normalize(norm_stats) which z-score
+        # normalizes the state BEFORE padding and model ingestion.
+        state_vec_np = self._normalize_state(state_vec_np)
+
+        state_vec = jnp.asarray(state_vec_np.reshape(1, -1))
+        # Pad state to action_dim to match the eval path.
+        # The eval pipeline applies pad_to_dim(state, action_dim) via
+        # a data transform (transforms.py:PadToModelActionDim) before
+        # the state reaches embed_suffix → state_proj(Linear(action_dim, ...)).
         if state_vec.shape[-1] < self.policy.config.action_dim:
             pad = jnp.zeros(
                 (1, self.policy.config.action_dim - state_vec.shape[-1])

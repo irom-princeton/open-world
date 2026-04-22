@@ -34,14 +34,41 @@ for _noisy in ["jax", "flax", "orbax", "openpi", "absl", "tensorflow",
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 
+def _apply_overrides(cfg: dict, overrides: list[str]) -> dict:
+    """Apply dotted key=value overrides to a nested config dict.
+
+    Example: ``--set reward_model.gpu=0`` sets ``cfg["reward_model"]["gpu"] = 0``.
+    Values are parsed as YAML scalars (so ``0`` becomes int, ``true`` becomes bool, etc.).
+    """
+    import yaml
+
+    for item in overrides:
+        key, _, value = item.partition("=")
+        if not _:
+            raise ValueError(f"Override must be key=value, got: {item!r}")
+        keys = key.split(".")
+        d = cfg
+        for k in keys[:-1]:
+            d = d.setdefault(k, {})
+        d[keys[-1]] = yaml.safe_load(value)
+    return cfg
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="RL fine-tuning with world model")
     parser.add_argument(
         "--config", type=str, required=True, help="Path to RL YAML config"
     )
+    parser.add_argument(
+        "--set", dest="overrides", action="append", default=[],
+        metavar="KEY=VALUE",
+        help="Override config values (dotted paths), e.g. --set reward_model.gpu=0",
+    )
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
+    if args.overrides:
+        _apply_overrides(cfg, args.overrides)
 
     # --- Start Robometer server (before JAX import) ---
     rm_cfg = cfg.get("reward_model", {})
@@ -121,6 +148,7 @@ def main() -> None:
     # --- Build and run trainer ---
     train_cfg = cfg.get("training", {})
     wandb_cfg = cfg.get("wandb", {})
+    adapter_cfg = cfg.get("action_adapter", pol_cfg.get("action_adapter", {}))
     # RLFineTuneRunner creates PPOTrainer which calls nnx.split + optimizer.init
     # — these can trigger verbose Flax output.
     _devnull2 = io.StringIO()
@@ -143,6 +171,11 @@ def main() -> None:
             wandb_run_name=wandb_cfg.get("run_name"),
             wandb_config=cfg,
             rng_seed=train_cfg.get("rng_seed", 42),
+            action_adapter_checkpoint_path=adapter_cfg.get("checkpoint_path"),
+            action_adapter_gripper_max=adapter_cfg.get("gripper_max", 1.0),
+            action_adapter_device=adapter_cfg.get("device"),
+            policy_skip_step=adapter_cfg.get("policy_skip_step", 1),
+            num_action_steps=adapter_cfg.get("num_action_steps"),
         )
 
     # --- Load action normalization stats ---
@@ -159,14 +192,26 @@ def main() -> None:
         # Load from openpi checkpoint assets
         norm_stats_path = pol_cfg.get("norm_stats_path")
         if norm_stats_path is None:
-            # Default: try to load from the openpi checkpoint's assets dir
+            # Default: try to load from the openpi checkpoint's assets dir.
+            # The checkpoint_path may be a GCS URL — resolve it through
+            # openpi's cache so we find the already-downloaded copy.
             import json
             from pathlib import Path
             ckpt_path = pol_cfg["checkpoint_path"]
+
+            from openworld.policies.openpi_loader import ensure_openpi_repo_on_path
+            ensure_openpi_repo_on_path(pol_cfg.get("repo_path"))
+            import openpi.shared.download as _download
+
+            try:
+                local_ckpt = _download.maybe_download(ckpt_path)
+            except Exception:
+                local_ckpt = Path(ckpt_path)
+
             candidates = [
+                Path(local_ckpt) / "assets" / "droid" / "norm_stats.json",
                 Path(ckpt_path) / "assets" / "droid" / "norm_stats.json",
             ]
-            # Also check if already downloaded via gcs
             for candidate in candidates:
                 if candidate.exists():
                     norm_stats_path = str(candidate)
@@ -195,6 +240,21 @@ def main() -> None:
                 mean=np.array(action_stats["mean"]),
                 std=np.array(action_stats["std"]),
             )
+            # State normalization — the eval path applies Normalize(norm_stats)
+            # which z-score normalizes the state input before the model sees it.
+            # Without this, the model receives raw joint angles instead of the
+            # near-zero normalized values it was trained on.
+            if "state" in stats:
+                state_stats = stats["state"]
+                runner.set_state_norm_stats(
+                    mean=np.array(state_stats["mean"]),
+                    std=np.array(state_stats["std"]),
+                )
+            else:
+                logger.warning(
+                    "No state norm stats found — state will NOT be normalized. "
+                    "Policy conditioning on state will be incorrect."
+                )
         else:
             logger.warning(
                 "No action norm stats found — actions will NOT be denormalized. "

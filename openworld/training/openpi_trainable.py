@@ -212,6 +212,7 @@ class TrainablePi0(nnx.Module):
         )
         return prefix_out, suffix_out
 
+    @nnx.jit
     def _forward_prefix_cached(self, observation: _model.Observation):
         """Build KV cache from prefix for efficient multi-step denoising."""
         prefix_tokens, prefix_mask, prefix_ar_mask = self._embed_prefix(observation)
@@ -224,6 +225,7 @@ class TrainablePi0(nnx.Module):
         )
         return prefix_out, prefix_mask, kv_cache
 
+    @nnx.jit
     def _forward_suffix_with_cache(
         self,
         observation: _model.Observation,
@@ -417,8 +419,12 @@ class TrainablePi0(nnx.Module):
         noise_level = self._current_noise_level
 
         # Pick one random denoising step to be stochastic (for non-joint logprob).
+        # Exclude idx=0 (t=1.0) because the SDE noise schedule has a
+        # singularity there: sigma = noise_level * sqrt(t / (1-t)) → ∞
+        # as t→1.  At idx=0 the mean and std explode (~1e6), producing
+        # garbage actions that make the robot go crazy.
         # Convert to Python int for use in the unrolled loop.
-        denoise_idx = int(jax.random.randint(idx_rng, (), 0, num_steps))
+        denoise_idx = int(jax.random.randint(idx_rng, (), 1, num_steps))
         denoise_inds = jnp.full((batch_size,), denoise_idx, dtype=jnp.int32)
 
         # Denoising loop (unrolled, no jax.lax.while_loop, so we can
@@ -462,10 +468,13 @@ class TrainablePi0(nnx.Module):
 
         chains = jnp.stack(chains, axis=1)  # [B, S+1, H, D]
 
-        # Slice to action_chunk x action_env_dim
-        ac = self.config.action_chunk
+        # Slice to (action_horizon, action_env_dim).  We keep the FULL Pi0
+        # horizon (not just action_chunk) so the log-prob covers every raw
+        # action the policy generated, including those that the runner's
+        # policy_skip_step subsample later discards.  See docs/PPO_NOTES.md
+        # for why this matters for credit assignment.
         ed = self.config.action_env_dim
-        log_probs = log_probs_at_stochastic[:, :ac, :ed]
+        log_probs = log_probs_at_stochastic[:, :, :ed]
 
         return {
             "actions": x_t,
@@ -536,11 +545,11 @@ class TrainablePi0(nnx.Module):
         log_probs = self._gaussian_log_prob(x_next, x_t_mean, x_t_std)
         entropy = self._gaussian_entropy(x_t_std)
 
-        # Slice to action chunk x env dim
-        ac = self.config.action_chunk
+        # Slice to (action_horizon, action_env_dim) — keep full Pi0 horizon
+        # so the shape matches what was stored at rollout time.
         ed = self.config.action_env_dim
-        log_probs = log_probs[:, :ac, :ed]
-        entropy = entropy[:, :ac, :ed]
+        log_probs = log_probs[:, :, :ed]
+        entropy = entropy[:, :, :ed]
 
         # Value
         values = self._compute_value(suffix_out)

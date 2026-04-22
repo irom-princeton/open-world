@@ -272,7 +272,12 @@ def run_server(model_path: str, fps: float) -> None:
     # pollute the JSON protocol on stdout.
     sys.stdout = sys.stderr
 
+    import os as _os
     print(f"Loading Robometer model from {model_path} ...")
+    print(f"  HF_HOME={_os.environ.get('HF_HOME', '<unset>')}")
+    print(f"  HF_HUB_CACHE={_os.environ.get('HF_HUB_CACHE', '<unset>')}")
+    print(f"  HF_HUB_OFFLINE={_os.environ.get('HF_HUB_OFFLINE', '<unset>')}")
+    print(f"  TRANSFORMERS_OFFLINE={_os.environ.get('TRANSFORMERS_OFFLINE', '<unset>')}")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     exp_config, tokenizer, processor, reward_model = load_model_from_hf(
         model_path=model_path, device=device

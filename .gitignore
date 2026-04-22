@@ -17,6 +17,7 @@ wandb/
 outputs/
 logs/
 videos/
+*_cache/
 
 bash_scripts/
 checkpoints/
@@ -24,6 +25,7 @@ data/
 external/*
 !external/download_models.sh
 !external/predownload_ckpt.sh
+models/
 tests/
 tmp_*
 slurm_outputs/

@@ -14,6 +14,7 @@ Uses optax for optimization and Flax NNX for parameter management.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -78,6 +79,14 @@ class PPOTrainer:
     ``RLFineTuneRunner``.
     """
 
+    # Keywords identifying trainable parameter groups.
+    _TRAINABLE_KEYWORDS = (
+        "lora", "value_head",
+        "action_in_proj", "action_out_proj",
+        "action_time_mlp", "state_proj",
+        "time_mlp_in", "time_mlp_out",
+    )
+
     def __init__(
         self,
         model: TrainablePi0,
@@ -100,6 +109,11 @@ class PPOTrainer:
         self.opt_state = self.optimizer.init(state.to_pure_dict())
 
         self._step_count = 0
+
+        # Pre-compile the gradient function so we don't retrace every call.
+        self._grad_fn = jax.jit(
+            jax.value_and_grad(self._loss_fn, has_aux=True)
+        )
 
     @staticmethod
     def _build_trainable_mask(model: TrainablePi0) -> Any:
@@ -171,7 +185,20 @@ class PPOTrainer:
             adv = jax_batch["advantages"]
             jax_batch["advantages"] = (adv - jnp.mean(adv)) / (jnp.std(adv) + 1e-8)
 
+        # Config scalars packed separately — they are 0-d and must not
+        # be indexed when slicing mini-batches.
+        cfg_scalars = {
+            "_clip_eps": jnp.float32(cfg.clip_eps),
+            "_vf_coef": jnp.float32(cfg.vf_coef),
+            "_entropy_coef": jnp.float32(cfg.entropy_coef),
+        }
+
+        # Split once — thread state through all mini-batch steps to avoid
+        # repeated nnx.split / nnx.update per step.
+        graphdef, state = nnx.split(self.model)
+
         all_metrics = []
+        should_stop = False
 
         for epoch in range(cfg.num_epochs):
             # Shuffle and create mini-batches
@@ -180,10 +207,15 @@ class PPOTrainer:
                 end = min(start + cfg.mini_batch_size, n)
                 indices = perm[start:end]
                 mb = jax.tree.map(lambda x: x[indices], jax_batch)
+                mb.update(cfg_scalars)
 
-                metrics, should_stop = self._update_step(mb)
+                state, metrics = self._update_step(state, graphdef, mb)
                 all_metrics.append(metrics)
 
+                should_stop = (
+                    cfg.target_kl > 0
+                    and metrics["approx_kl"] > cfg.target_kl
+                )
                 if should_stop:
                     logger.info(
                         "PPO early stopping at epoch %d (KL=%.4f > target=%.4f)",
@@ -193,6 +225,9 @@ class PPOTrainer:
 
             if should_stop:
                 break
+
+        # Write updated params back to the model once.
+        nnx.update(self.model, state)
 
         self._step_count += 1
         self.model.update_noise_level(self._step_count)
@@ -207,26 +242,18 @@ class PPOTrainer:
         return avg_metrics
 
     def _update_step(
-        self, mini_batch: dict[str, jnp.ndarray]
-    ) -> tuple[dict[str, float], bool]:
+        self,
+        state: nnx.State,
+        graphdef: nnx.GraphDef,
+        mini_batch: dict[str, jnp.ndarray],
+    ) -> tuple[nnx.State, dict[str, float]]:
         """Single gradient update step.
 
-        Returns (metrics_dict, should_stop).
+        Takes and returns nnx.State so the caller can thread state
+        through multiple mini-batch steps without split/merge overhead.
         """
-        graphdef, state = nnx.split(self.model)
+        (loss, aux), grads = self._grad_fn(state, graphdef, mini_batch)
 
-        # Pack config scalars into the batch so _loss_fn (a static method)
-        # can access them without needing self.
-        mini_batch = dict(mini_batch)
-        mini_batch["_clip_eps"] = jnp.float32(self.config.clip_eps)
-        mini_batch["_vf_coef"] = jnp.float32(self.config.vf_coef)
-        mini_batch["_entropy_coef"] = jnp.float32(self.config.entropy_coef)
-
-        (loss, aux), grads = jax.value_and_grad(self._loss_fn, has_aux=True)(
-            state, graphdef, mini_batch
-        )
-
-        # Convert to pure dicts so the optimizer mask (plain dict) matches.
         grads_dict = grads.to_pure_dict()
         state_dict = state.to_pure_dict()
 
@@ -236,9 +263,8 @@ class PPOTrainer:
         new_state_dict = optax.apply_updates(state_dict, updates)
         self.opt_state = new_opt_state
 
-        # Convert back to State and apply to model
-        new_state = state.replace_by_pure_dict(new_state_dict)
-        nnx.update(self.model, new_state)
+        # replace_by_pure_dict is in-place (returns None).
+        state.replace_by_pure_dict(new_state_dict)
 
         metrics = {
             "loss": float(loss),
@@ -247,13 +273,17 @@ class PPOTrainer:
             "entropy": float(aux["entropy"]),
             "approx_kl": float(aux["approx_kl"]),
             "clip_fraction": float(aux["clip_fraction"]),
+            "ratio_mean": float(aux["ratio_mean"]),
+            "ratio_std": float(aux["ratio_std"]),
+            "ratio_min": float(aux["ratio_min"]),
+            "ratio_max": float(aux["ratio_max"]),
+            "log_prob_new_mean": float(aux["log_prob_new_mean"]),
+            "log_prob_old_mean": float(aux["log_prob_old_mean"]),
+            "value_mean": float(aux["value_mean"]),
+            "value_std": float(aux["value_std"]),
+            "explained_variance": float(aux["explained_variance"]),
         }
-
-        should_stop = (
-            self.config.target_kl > 0
-            and metrics["approx_kl"] > self.config.target_kl
-        )
-        return metrics, should_stop
+        return state, metrics
 
     @staticmethod
     def _loss_fn(
@@ -264,6 +294,9 @@ class PPOTrainer:
         """PPO clipped objective + value loss + entropy bonus.
 
         This is a pure function suitable for ``jax.value_and_grad``.
+        Frozen parameters are wrapped with ``stop_gradient`` so XLA
+        skips their backward-pass computation — major speedup when
+        only ~1% of params are trainable.
 
         Args:
             state: Current model parameters (Flax NNX state).
@@ -275,6 +308,19 @@ class PPOTrainer:
             (total_loss, aux_dict) where aux_dict contains component losses
             and diagnostics.
         """
+        # Apply stop_gradient to frozen params so XLA skips computing
+        # their gradients (LoRA + value head + action projections are
+        # trainable; everything else is frozen).
+        keywords = PPOTrainer._TRAINABLE_KEYWORDS
+
+        def _maybe_stop_grad(path, x):
+            path_str = jax.tree_util.keystr(path).lower()
+            if any(kw in path_str for kw in keywords):
+                return x
+            return jax.lax.stop_gradient(x)
+
+        state = jax.tree_util.tree_map_with_path(_maybe_stop_grad, state)
+
         model = nnx.merge(graphdef, state)
 
         # Reconstruct observation from stored arrays
@@ -301,14 +347,21 @@ class PPOTrainer:
         vf_coef = mini_batch["_vf_coef"]
         entropy_coef = mini_batch["_entropy_coef"]
 
-        # Per-sample log-prob ratio (sum across action dims)
-        log_ratio = jnp.sum(new_log_probs - old_log_probs, axis=(-2, -1))
-        ratio = jnp.exp(log_ratio)
+        # Per-element PPO: each (action_horizon, action_env_dim) cell is its
+        # own PPO sample with its own ε trust region.  RLinf does the same
+        # (rlinf/algorithms/losses.py:241-269).  Avoids the "sum 70 log-probs
+        # into the exponent" failure mode documented in docs/PPO_NOTES.md.
+        # log_ratio is still clipped before exp as a numerical safety net.
+        log_ratio = new_log_probs - old_log_probs                  # [B, H, D]
+        log_ratio = jnp.clip(log_ratio, -10.0, 10.0)
+        ratio = jnp.exp(log_ratio)                                  # [B, H, D]
 
-        # Clipped surrogate objective
-        pg_loss1 = -advantages * ratio
-        pg_loss2 = -advantages * jnp.clip(ratio, 1.0 - clip_eps, 1.0 + clip_eps)
-        policy_loss = jnp.mean(jnp.maximum(pg_loss1, pg_loss2))
+        # Broadcast scalar advantages [B] across action dims.
+        adv_b = advantages[:, None, None]                           # [B, 1, 1]
+
+        pg_loss1 = -adv_b * ratio
+        pg_loss2 = -adv_b * jnp.clip(ratio, 1.0 - clip_eps, 1.0 + clip_eps)
+        policy_loss = jnp.mean(jnp.maximum(pg_loss1, pg_loss2))     # mean over [B, H, D]
 
         # Value loss (simple MSE)
         value_loss = 0.5 * jnp.mean((new_values - returns) ** 2)
@@ -316,11 +369,16 @@ class PPOTrainer:
         # Total loss
         total_loss = policy_loss + vf_coef * value_loss - entropy_coef * entropy
 
-        # Diagnostics
+        # Diagnostics — per-element, then averaged.
         approx_kl = jnp.mean((ratio - 1.0) - log_ratio)
         clip_fraction = jnp.mean(
             jnp.abs(ratio - 1.0) > clip_eps
         )
+
+        # Explained variance of the value head: 1 - Var(returns - values)/Var(returns).
+        # Near 0 = value fn no better than predicting the mean; near 1 = near-perfect.
+        returns_var = jnp.var(returns)
+        explained_var = 1.0 - jnp.var(returns - new_values) / (returns_var + 1e-8)
 
         aux = {
             "policy_loss": policy_loss,
@@ -328,6 +386,18 @@ class PPOTrainer:
             "entropy": entropy,
             "approx_kl": approx_kl,
             "clip_fraction": clip_fraction,
+            # Ratio distribution — shows how much the policy actually moved.
+            "ratio_mean": jnp.mean(ratio),
+            "ratio_std": jnp.std(ratio),
+            "ratio_min": jnp.min(ratio),
+            "ratio_max": jnp.max(ratio),
+            # Log-prob magnitudes before/after the update.
+            "log_prob_new_mean": jnp.mean(new_log_probs),
+            "log_prob_old_mean": jnp.mean(old_log_probs),
+            # Value head diagnostics.
+            "value_mean": jnp.mean(new_values),
+            "value_std": jnp.std(new_values),
+            "explained_variance": explained_var,
         }
 
         return total_loss, aux
@@ -336,6 +406,7 @@ class PPOTrainer:
         """Save trainable parameters to disk."""
         import orbax.checkpoint as ocp
 
+        path = os.path.abspath(path)
         _, state = nnx.split(self.model)
         with ocp.PyTreeCheckpointer() as ckptr:
             ckptr.save(path, state.to_pure_dict())

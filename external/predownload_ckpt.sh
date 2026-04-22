@@ -127,11 +127,12 @@ if [ "${DO_ROBOMETER}" = true ]; then
 
   python3 -c "
 from huggingface_hub import snapshot_download
-import os
+import os, yaml
 
-model_id = 'robometer/Robometer-4B'
 cache_dir = os.environ.get('HF_HUB_CACHE', None)
 
+# 1. Download the Robometer checkpoint itself.
+model_id = 'robometer/Robometer-4B'
 print(f'Downloading {model_id} to HuggingFace cache...')
 local_path = snapshot_download(
     repo_id=model_id,
@@ -139,8 +140,32 @@ local_path = snapshot_download(
     allow_patterns=['*.safetensors', '*.bin', '*.json', '*.txt', '*.model', '*.yaml'],
 )
 print(f'Cached at: {local_path}')
+
+# 2. Download the base model referenced in the checkpoint's config.yaml.
+config_path = os.path.join(local_path, 'config.yaml')
+if os.path.exists(config_path):
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
+    base_model_id = cfg.get('model', {}).get('base_model_id')
+    if base_model_id:
+        print(f'Downloading base model {base_model_id} ...')
+        base_path = snapshot_download(repo_id=base_model_id, cache_dir=cache_dir)
+        print(f'Base model cached at: {base_path}')
+    else:
+        print('Warning: no model.base_model_id found in config.yaml')
+else:
+    print('Warning: no config.yaml in checkpoint — skipping base model download')
+
 print('Done.')
 "
+
+  # Pre-resolve robometer's uv environment so that `uv run` on offline
+  # GPU nodes doesn't try to fetch git dependencies (e.g. evo-vlac).
+  ROBOMETER_DIR="${REPO_ROOT}/external/robometer"
+  if [ -d "${ROBOMETER_DIR}" ]; then
+    echo "Pre-syncing robometer uv environment..."
+    (cd "${ROBOMETER_DIR}" && uv sync)
+  fi
 
   echo ""
   echo "Robometer download complete."
@@ -157,5 +182,6 @@ echo "  pi05_droid:      ${OPENPI_CACHE}/openpi-assets/checkpoints/pi05_droid"
 echo "  tokenizer:       ${OPENPI_CACHE}/big_vision/paligemma_tokenizer.model"
 echo "HuggingFace cache: ${HF_HOME:-~/.cache/huggingface}"
 echo "  Robometer-4B:    (managed by huggingface_hub)"
+echo "  Base model:      (auto-detected from config.yaml, managed by huggingface_hub)"
 echo ""
 echo "All pre-downloads finished."

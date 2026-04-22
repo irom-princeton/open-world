@@ -39,9 +39,16 @@ BENCHMARK_DIR="${PROJ_DIR}/data/benchmark/irom_test_carrot"
 
 if [ ! -d "${BENCHMARK_DIR}" ]; then
   mkdir -p "${PROJ_DIR}/data/benchmark"
-  git clone https://huggingface.co/datasets/tennyyyin/open-world-benchmark "${BENCHMARK_DIR}"
+  TMPDIR_BENCH="$(mktemp -d)"
+  git clone https://huggingface.co/datasets/tennyyyin/open-world-benchmark "${TMPDIR_BENCH}/repo"
+  git -C "${TMPDIR_BENCH}/repo" lfs pull
+  # The repo has a nested irom_test_carrot/ directory — lift its contents
+  # up so that init_* dirs sit directly under BENCHMARK_DIR.
+  mv "${TMPDIR_BENCH}/repo/irom_test_carrot" "${BENCHMARK_DIR}"
+  rm -rf "${TMPDIR_BENCH}"
+else
+  echo "Benchmark directory already exists: ${BENCHMARK_DIR}"
 fi
-git -C "${BENCHMARK_DIR}" lfs pull
 
 echo "Done."
 echo "CLIP path: ${ROOT_DIR}/clip-vit-base-patch32"

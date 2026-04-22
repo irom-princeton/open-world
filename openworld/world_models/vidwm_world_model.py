@@ -181,6 +181,7 @@ class VidWMWorldModel(WorldModel):
 
         logger.info("Loading SVD pipeline from %s", svd_path)
         self.pipeline = VidWMDiffusionPipeline.from_pretrained(svd_path)
+        self.pipeline.set_progress_bar_config(disable=True)
 
         # ---- replace UNet with distance-conditioned variant ----
         unet = UNetSpatioTemporalConditionModel(
@@ -466,12 +467,16 @@ class VidWMWorldModel(WorldModel):
         current_latent = current_latent.to(device=device, dtype=self._dtype)
 
         # Initialize buffer with copies of current frame if needed.
-        # Size must be large enough so that all negative indices in
-        # history_idx are valid from the very first rollout.
+        # Size = num_history * 4, matching the Ctrl-World reference
+        # (rollout_interact_pi.py:338).  This ensures that negative
+        # history_idx entries (e.g. -3, -6, …) continue to point at
+        # initial-frame copies for many rollouts, giving the model a
+        # stable warm-up period before predicted frames enter the
+        # history.  A smaller init_size (e.g. max(|neg_indices|))
+        # causes predicted frames to appear in history too early,
+        # leading to compounding error and rollout divergence.
         if history_buffer is None:
-            neg_indices = [abs(idx) for idx in cfg.history_idx if idx < 0]
-            init_size = max(neg_indices) if neg_indices else len(cfg.history_idx)
-            init_size = max(init_size, len(cfg.history_idx))
+            init_size = cfg.num_history * 4
             history_buffer = [current_latent.clone() for _ in range(init_size)]
 
         # Build sparse history_latents using history_idx
@@ -798,9 +803,7 @@ class VidWMWorldModel(WorldModel):
                 raw = raw.reshape(1, -1)
             initial_state = raw[0]
 
-        neg_indices = [abs(idx) for idx in cfg.history_idx if idx < 0]
-        init_size = max(neg_indices) if neg_indices else len(cfg.history_idx)
-        init_size = max(init_size, len(cfg.history_idx))
+        init_size = cfg.num_history * 4  # match Ctrl-World reference
         return [initial_state.copy() for _ in range(init_size)]
 
     def _decode_latents(self, latents: torch.Tensor) -> List[np.ndarray]:
