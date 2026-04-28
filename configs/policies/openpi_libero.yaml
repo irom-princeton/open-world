@@ -1,0 +1,29 @@
+# pi05_libero (zero-shot LIBERO) wired through the LIBERO action adapter.
+name: openpi_libero
+checkpoint_path: gs://openpi-assets/checkpoints/pi05_libero
+params:
+  config_name: pi05_libero
+  repo_path: external/openpi
+  pytorch_device: cuda
+  debug: false
+  debug_log_limit: 3
+
+  # LIBERO observation routing.
+  libero_agent_view_name: agentview
+  libero_wrist_view_name: wrist
+  rotate_180: true
+
+  # Image preprocessing (matches openpi LIBERO eval defaults).
+  resize_height: 224
+  resize_width: 224
+
+  # Action adapter (trained by scripts/train_libero_adapter.py).
+  action_adapter_checkpoint_path: checkpoints/action_adapter_libero/model2_15_9.pth
+  action_adapter_gripper_max: 1.0
+  libero_adapter_action_num: 15
+  libero_adapter_action_dim: 7
+  libero_adapter_hidden_size: 512
+
+  # Match the WM step rate.
+  policy_skip_step: 2
+  num_action_steps: 5

@@ -1,0 +1,29 @@
+# Inference-time world-model config for LIBERO.
+# Reuses VidWMWorldModel; only the LIBERO-specific knobs differ.
+name: vidwm
+checkpoint_path: checkpoints/wm_libero/libero_flow_matching_v0/checkpoint-120000.pt
+params:
+  svd_model_path: external/stable-video-diffusion-img2vid
+  clip_model_path: external/clip-vit-base-patch32
+  debug: false
+  debug_log_limit: 3
+
+  num_frames: 5
+  num_history: 6
+  action_dim: 7         # 6 EEF + 1 gripper
+  action_downsample: 1
+  width: 320
+  height: 192
+  num_inference_steps: 50
+
+  # Train-time used flow_matching; for fast inference switch to shortcut + 4-8 steps.
+  flow_map_type: flow_matching
+  decode_to_rgb: true
+
+  action_encoder_type: unaligned
+
+  # Two cameras for LIBERO: agentview + wrist.
+  view_order: [agentview, wrist]
+
+  # Use the LIBERO percentile stats.
+  action_stat_path: dataset_meta_info/libero/stat.json

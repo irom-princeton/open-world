@@ -1,0 +1,64 @@
+# LIBERO eval: pi0.5 zero-shot policy + LIBERO world model.
+#
+# Run with:
+#   python scripts/run_evaluation.py --config configs/evaluation/libero_pi05.yaml
+#
+# Initialization data should be a directory of LIBERO episode starts produced
+# by your existing `data/benchmark/...` builder for LIBERO (one
+# `Initialization` per LIBERO scene/task/seed). See docs/EVAL.md for the
+# format.
+
+world_model:
+  name: vidwm
+  checkpoint_path: checkpoints/wm_libero/libero_flow_matching_v0/checkpoint-120000.pt
+  params:
+    svd_model_path: external/stable-video-diffusion-img2vid
+    clip_model_path: external/clip-vit-base-patch32
+    debug: false
+    debug_log_limit: 3
+    num_frames: 5
+    num_history: 6
+    action_dim: 7
+    action_downsample: 1
+    width: 320
+    height: 192
+    num_inference_steps: 50
+    flow_map_type: flow_matching
+    decode_to_rgb: true
+    action_encoder_type: unaligned
+    view_order: [agentview, wrist]
+    action_stat_path: dataset_meta_info/libero/stat.json
+
+policy:
+  name: openpi_libero
+  checkpoint_path: gs://openpi-assets/checkpoints/pi05_libero
+  params:
+    config_name: pi05_libero
+    repo_path: external/openpi
+    pytorch_device: cuda
+    debug: false
+    debug_log_limit: 3
+    libero_agent_view_name: agentview
+    libero_wrist_view_name: wrist
+    rotate_180: true
+    resize_height: 224
+    resize_width: 224
+    action_adapter_checkpoint_path: checkpoints/action_adapter_libero/model2_15_9.pth
+    action_adapter_gripper_max: 1.0
+    libero_adapter_action_num: 15
+    libero_adapter_action_dim: 7
+    libero_adapter_hidden_size: 512
+    policy_skip_step: 2
+    num_action_steps: 5
+
+reward_model:
+  name: dummy
+  params: {}
+
+scheduler:
+  chunk_size: 5
+
+duration: 12          # number of WM rollouts per episode (each = 5 actions @ 5Hz = 1s)
+action_hz: 5
+video_dir: outputs/libero_pi05
+dataset_path: data/benchmark/libero_pi05_init
