@@ -16,7 +16,9 @@ env/
 wandb/
 outputs/
 logs/
+models/
 videos/
+*cache/
 
 bash_scripts/
 checkpoints/

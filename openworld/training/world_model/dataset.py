@@ -32,10 +32,13 @@ from torch.utils.data import Dataset
 
 
 def _load_stat(meta_root: str, dataset_name: str) -> tuple[np.ndarray, np.ndarray]:
-    """Load (state_p01, state_p99) for normalization. Falls back to the
-    pooled LIBERO stat if a per-suite file is missing."""
+    """Load (state_p01, state_p99) for normalization. Accepts either a
+    per-suite file (``<meta_root>/<suite>/stat.json``) or a single shared
+    file at ``<meta_root>/stat.json`` (or the legacy pooled
+    ``<meta_root>/libero/stat.json``)."""
     candidates = [
         os.path.join(meta_root, dataset_name, "stat.json"),
+        os.path.join(meta_root, "stat.json"),
         os.path.join(meta_root, "libero", "stat.json"),
     ]
     for path in candidates:

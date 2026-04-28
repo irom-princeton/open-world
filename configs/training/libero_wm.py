@@ -16,14 +16,14 @@ def get_args() -> LiberoWMArgs:
         ckpt_path=None,  # set to e.g. checkpoints/wm/checkpoint-120000.pt to warm-start
 
         # ----- Dataset -----
-        dataset_root_path="data/libero_processed",
-        dataset_meta_info_path="dataset_meta_info",
+        dataset_root_path="data/wm_training/libero_processed",
+        dataset_meta_info_path="data/wm_training/libero_processed",
         dataset_names="libero_spatial+libero_object+libero_goal+libero_10",
         dataset_cfgs="libero_spatial+libero_object+libero_goal+libero_10",
         prob=(0.25, 0.25, 0.25, 0.25),
 
         # ----- Compute -----
-        train_batch_size=1,
+        train_batch_size=4,
         gradient_accumulation_steps=1,
         mixed_precision="fp16",
         num_workers=4,
@@ -31,8 +31,8 @@ def get_args() -> LiberoWMArgs:
         # ----- Schedule -----
         learning_rate=1e-5,
         max_train_steps=500_000,
-        checkpointing_steps=20_000,
-        validation_steps=2_500,
+        checkpointing_steps=2_000,
+        validation_steps=2_00,
         max_grad_norm=1.0,
 
         # ----- Architecture (LIBERO-specific) -----
