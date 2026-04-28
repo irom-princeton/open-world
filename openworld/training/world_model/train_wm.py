@@ -30,7 +30,6 @@ import datetime
 import importlib.util
 import math
 import os
-import sys
 from pathlib import Path
 
 import einops
@@ -43,24 +42,7 @@ from tqdm.auto import tqdm
 
 from openworld.training.world_model.config import LiberoWMArgs
 from openworld.training.world_model.dataset import LiberoLatentDataset
-
-
-# ---------------------------------------------------------------------------
-# Vendor the Fast-Control-World model code so we don't reimplement diffusion.
-# ---------------------------------------------------------------------------
-
-FCW_DEFAULT_PATH = os.environ.get(
-    "FCW_PATH", "/n/fs/iromdata/project/Fast-Control-World"
-)
-
-
-def _import_crtl_world(fcw_path: str):
-    if fcw_path not in sys.path:
-        sys.path.insert(0, fcw_path)
-    from models.flow_map_ctrl_world import CrtlWorld  # noqa: E402
-    from models.pipeline_flow_map_ctrl_world import CtrlWorldDiffusionPipeline  # noqa: E402
-
-    return CrtlWorld, CtrlWorldDiffusionPipeline
+from openworld.world_models.ctrl_world import CrtlWorld, CtrlWorldDiffusionPipeline
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +188,7 @@ def validate_video_generation(
 # ---------------------------------------------------------------------------
 
 
-def main(args: LiberoWMArgs, fcw_path: str) -> None:
+def main(args: LiberoWMArgs) -> None:
     logger = get_logger(__name__, log_level="INFO")
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(
@@ -217,8 +199,7 @@ def main(args: LiberoWMArgs, fcw_path: str) -> None:
         kwargs_handlers=[ddp_kwargs],
     )
 
-    CrtlWorld, pipeline_cls = _import_crtl_world(fcw_path)
-
+    pipeline_cls = CtrlWorldDiffusionPipeline
     model = CrtlWorld(args)
     if args.ckpt_path is not None:
         logger.info(f"Loading checkpoint from {args.ckpt_path}")
@@ -360,8 +341,6 @@ def cli() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None,
                         help="Path to a Python config file with get_args() -> LiberoWMArgs")
-    parser.add_argument("--fcw_path", type=str, default=FCW_DEFAULT_PATH,
-                        help="Path to the Fast-Control-World repo (provides the WM model code).")
     # Common overrides for one-off runs:
     parser.add_argument("--ckpt_path", type=str, default=None)
     parser.add_argument("--dataset_root_path", type=str, default=None)
@@ -380,7 +359,7 @@ def cli() -> None:
         args.output_dir = f"checkpoints/wm_libero/{args.tag}"
         args.wandb_run_name = args.tag
 
-    main(args, cli_args.fcw_path)
+    main(args)
 
 
 if __name__ == "__main__":

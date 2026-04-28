@@ -17,7 +17,7 @@ def get_args() -> LiberoAdapterArgs:
         hidden_size=512,
         learning_rate=1e-4,
         batch_size=128,
-        num_epochs=10,
+        num_epochs=20,
         output_dir="checkpoints/action_adapter_libero",
         tag="libero_v0",
     )
