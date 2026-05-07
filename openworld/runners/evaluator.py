@@ -35,7 +35,15 @@ class Evaluator:
         info = self.env.reset(initialization)
         self.policy.reset(instruction=initialization.instruction)
 
-        all_frames: List[Any] = [render_observation_frame(info["observation"])]
+        # Match the initial observation layout to the WM's stacked-view
+        # convention so frame 0 of the saved video aligns with the predicted
+        # frames that follow.
+        wm_cfg = getattr(getattr(self.env, "world_model", None), "config", None)
+        wm_view_order = getattr(wm_cfg, "view_order", None)
+        render_kwargs = {"view_order": tuple(wm_view_order)} if wm_view_order else {}
+        all_frames: List[Any] = [
+            render_observation_frame(info["observation"], **render_kwargs)
+        ]
 
         for step in range(max_steps):
             obs = self.env.get_current_observation()

@@ -12,7 +12,13 @@ def render_observation_frame(
     *,
     view_order: tuple[str, ...] = ("exterior_right", "exterior_left", "wrist"),
 ):
-    """Render an observation into a single RGB frame for video export."""
+    """Render an observation into a single RGB frame for video export.
+
+    If every name in ``view_order`` is present in the observation, that exact
+    order is used. Otherwise we fall back to the dict's insertion order so the
+    frame layout matches whatever the dataset writer chose (and matches the
+    world model's stacked-view layout, which is also dict-order).
+    """
     import numpy as np
     from PIL import Image
 
@@ -36,8 +42,10 @@ def render_observation_frame(
     if isinstance(observation, dict):
         views = observation.get("views", observation)
         if isinstance(views, dict):
-            ordered_names = [name for name in view_order if name in views]
-            ordered_names.extend(name for name in views if name not in ordered_names)
+            if all(name in views for name in view_order):
+                ordered_names = list(view_order)
+            else:
+                ordered_names = list(views)
             frames = [_load_rgb(views[name]) for name in ordered_names]
             if not frames:
                 raise ValueError("Observation view dict is empty.")

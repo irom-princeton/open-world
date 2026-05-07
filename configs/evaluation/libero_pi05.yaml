@@ -10,7 +10,7 @@
 
 world_model:
   name: vidwm
-  checkpoint_path: checkpoints/wm_libero/libero_flow_matching_v0/checkpoint-120000.pt
+  checkpoint_path: checkpoints/wm/libero/checkpoint-32000.pt
   params:
     svd_model_path: external/stable-video-diffusion-img2vid
     clip_model_path: external/clip-vit-base-patch32
@@ -21,13 +21,13 @@ world_model:
     action_dim: 7
     action_downsample: 1
     width: 320
-    height: 192
+    height: 320
     num_inference_steps: 50
     flow_map_type: flow_matching
     decode_to_rgb: true
     action_encoder_type: unaligned
     view_order: [agentview, wrist]
-    action_stat_path: dataset_meta_info/libero/stat.json
+    action_stats_preset: libero
 
 policy:
   name: openpi_libero
@@ -43,7 +43,7 @@ policy:
     rotate_180: true
     resize_height: 224
     resize_width: 224
-    action_adapter_checkpoint_path: checkpoints/action_adapter_libero/model2_15_9.pth
+    action_adapter_checkpoint_path: /n/fs/iromdata/project/open-world/checkpoints/action_adapter_libero/model2_15_19.pth
     action_adapter_gripper_max: 1.0
     libero_adapter_action_num: 15
     libero_adapter_action_dim: 7
@@ -61,4 +61,4 @@ scheduler:
 duration: 12          # number of WM rollouts per episode (each = 5 actions @ 5Hz = 1s)
 action_hz: 5
 video_dir: outputs/libero_pi05
-dataset_path: data/benchmark/libero_pi05_init
+dataset_path: data/benchmark/libero_init_10
