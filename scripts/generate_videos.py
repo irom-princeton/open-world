@@ -8,6 +8,7 @@ from pathlib import Path
 from openworld.datasets import Initialization, InitializationDataset
 from openworld.envs import ActionChunkScheduler, WorldModelEnv
 from openworld.policies import build_policy
+from openworld.rewards import build_reward_model
 from openworld.runners import Evaluator
 from openworld.utils.io import load_yaml
 from openworld.world_models import build_world_model
@@ -30,6 +31,10 @@ def main() -> None:
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--manifest-output", type=str, required=True,
                         help="Path to write the episode manifest JSON")
+    parser.add_argument("--rewards-output", type=str, default=None,
+                        help="When the reward_model is an inline frame judge "
+                             "(e.g. name: vlm), write a robometer-shaped "
+                             "rewards.json here so no separate scoring stage is needed.")
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
@@ -71,7 +76,18 @@ def main() -> None:
             )
         ])
 
-    evaluator = Evaluator(env=env, policy=policy)
+    # Optional inline frame judge. When the reward model scores individual frames
+    # (e.g. a VLM), it is queried after every world-model interaction during the
+    # rollout rather than as a separate post-hoc stage.
+    frame_scorer = None
+    rm_cfg = cfg.get("reward_model", {})
+    if rm_cfg.get("name") == "vlm":
+        reward_model = build_reward_model("vlm", **rm_cfg.get("params", {}))
+        frame_scorer = reward_model.score_frame
+        logger.info("Inline VLM frame judge enabled (model=%s)",
+                    rm_cfg.get("params", {}).get("model_id", "gemini-2.5-flash"))
+
+    evaluator = Evaluator(env=env, policy=policy, frame_scorer=frame_scorer)
 
     chunk_size = cfg.get("scheduler", {}).get("chunk_size", 15)
     action_hz = cfg.get("action_hz", 15)
@@ -114,6 +130,9 @@ def main() -> None:
             "num_frames": len(r["frames"]),
             "metadata": r.get("metadata", {}),
         }
+        if "vlm_scores" in r:
+            ep["vlm_scores"] = r["vlm_scores"]
+            ep["vlm_score_max"] = r["vlm_score_max"]
         if video_dir:
             ep["video_path"] = str(Path(video_dir).resolve() / f"{r['initialization_id']}.mp4")
         episodes.append(ep)
@@ -122,6 +141,25 @@ def main() -> None:
     Path(args.manifest_output).parent.mkdir(parents=True, exist_ok=True)
     Path(args.manifest_output).write_text(json.dumps(manifest, indent=2, default=str))
     logger.info("Manifest written to %s", args.manifest_output)
+
+    # When scoring happened inline (VLM frame judge), emit a robometer-shaped
+    # rewards.json so the downstream history-merge stage is unchanged.
+    if args.rewards_output and frame_scorer is not None:
+        reward_episodes = []
+        for r in results:
+            scores = r.get("vlm_scores", [])
+            reward_episodes.append({
+                "id": r["initialization_id"],
+                "vlm_scores": scores,
+                "vlm_score_max": r.get("vlm_score_max"),
+                # also expose as per_frame_progress for inspection / generic readers
+                "per_frame_progress": scores,
+            })
+        Path(args.rewards_output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.rewards_output).write_text(
+            json.dumps({"episodes": reward_episodes}, indent=2, default=str)
+        )
+        logger.info("VLM rewards written to %s", args.rewards_output)
 
 
 if __name__ == "__main__":

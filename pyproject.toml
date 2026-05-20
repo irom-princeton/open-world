@@ -11,9 +11,14 @@ requires-python = ">=3.11"
 dependencies = [
     "accelerate",
     "decord",
-    "diffusers==0.34.0",
+    # diffusers is sourced from the local external/diffusers fork (see
+    # [tool.uv.sources]). The fork carries the FLUX.2-klein pipelines used by
+    # the multiview image-edit model, which upstream 0.34.0 does not have.
+    "diffusers",
     "einops",
     "ftfy",
+    "google-genai",
+    "huggingface-hub",
     "hydra-core",
     "imageio[ffmpeg]",
     "joblib",
@@ -23,11 +28,15 @@ dependencies = [
     "omegaconf",
     "open_clip_torch",
     "pandas",
+    "peft",
     "pillow",
+    "protobuf",
     "pytorch-msssim",
     "pyyaml",
     "rich",
+    "safetensors",
     "scipy",
+    "sentencepiece",
     "swanlab",
     "torch",
     "torchmetrics",
@@ -116,6 +125,9 @@ conflicts = [
 ]
 
 [tool.uv.sources]
+# The diffusers fork lives under external/ and must be cloned before
+# `uv sync` (see external/README.md or run external/download_models.sh).
+diffusers = { path = "external/diffusers", editable = true }
 lerobot = { git = "https://github.com/huggingface/lerobot", rev = "0cf864870cf29f4738d3ade893e6fd13fbd7cdb5" }
 
 [tool.pytest.ini_options]

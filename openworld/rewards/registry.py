@@ -16,6 +16,12 @@ REWARD_MODEL_REGISTRY: dict[str, BackendSpec] = {
         module_path="openworld.rewards.robometer_reward_model",
         class_name="RobometerRewardModel",
     ),
+    "vlm": BackendSpec(
+        module_path="openworld.rewards.vlm_reward_model",
+        class_name="VLMRewardModel",
+        # backend (openai / gemini) is chosen at runtime; each SDK is imported
+        # lazily by VLMRewardModel with a clear error if missing.
+    ),
     "topreward": BackendSpec(
         module_path="openworld.rewards.topreward_reward_model",
         class_name="TOPRewardModel",

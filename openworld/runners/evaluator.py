@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from openworld.datasets.initialization import Initialization
 from openworld.datasets.initialization_dataset import InitializationDataset
@@ -18,9 +18,14 @@ class Evaluator:
         self,
         env: WorldModelEnv,
         policy: Policy,
+        frame_scorer: Optional[Callable[[Any, str], float]] = None,
     ):
         self.env = env
         self.policy = policy
+        # Optional callable (frame, instruction) -> float in [0, 1]. When set, it
+        # is queried after every world-model interaction on the latest frame so a
+        # policy that succeeds mid-rollout (and then drifts away) is still scored.
+        self.frame_scorer = frame_scorer
 
     def run_episode(
         self,
@@ -30,12 +35,15 @@ class Evaluator:
         """Run a single episode from the given initialization.
 
         Returns:
-            Dict with keys: ``frames``, ``metadata``, etc.
+            Dict with keys: ``frames``, ``metadata``, etc. When a ``frame_scorer``
+            is configured, also ``vlm_scores`` (one per interaction) and
+            ``vlm_score_max``.
         """
         info = self.env.reset(initialization)
         self.policy.reset(instruction=initialization.instruction)
 
         all_frames: List[Any] = [render_observation_frame(info["observation"])]
+        vlm_scores: List[float] = []
 
         for step in range(max_steps):
             obs = self.env.get_current_observation()
@@ -50,15 +58,31 @@ class Evaluator:
             step_info = self.env.step(action)
 
             if step_info["did_rollout"]:
-                all_frames.extend(step_info["predicted_frames"])
+                predicted = step_info["predicted_frames"]
+                all_frames.extend(predicted)
 
-        return {
+                # Judge the latest frame of this interaction (in case the policy
+                # reached the goal here even if it later drifts away).
+                if self.frame_scorer is not None and predicted:
+                    score = self.frame_scorer(predicted[-1], initialization.instruction)
+                    vlm_scores.append(float(score))
+                    logger.info(
+                        "%s step %d: VLM frame score %.3f", initialization.id, step, score
+                    )
+
+        result: Dict[str, Any] = {
             "initialization_id": initialization.id,
             "instruction": initialization.instruction,
             "frames": all_frames,
             "num_steps": max_steps,
-            "metadata": initialization.metadata,
+            "metadata": dict(initialization.metadata or {}),
         }
+        if self.frame_scorer is not None:
+            result["vlm_scores"] = vlm_scores
+            result["vlm_score_max"] = max(vlm_scores) if vlm_scores else None
+            result["metadata"]["vlm_scores"] = vlm_scores
+            result["metadata"]["vlm_score_max"] = result["vlm_score_max"]
+        return result
 
     def run_dataset(
         self,

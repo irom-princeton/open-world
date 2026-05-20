@@ -1,0 +1,123 @@
+# Redteam loop config.
+#
+# The `redteam` block configures the closed-loop orchestrator (bash_scripts/redteam.sh).
+# Every other top-level block (world_model / policy / scheduler / reward_model / duration /
+# action_hz) mirrors a standard evaluation config and is passed straight through to
+# scripts/generate_videos.py via `openworld.redteam.config --emit-eval-config`.
+# `dataset_path` and `video_dir` are intentionally absent here -- they are injected
+# per-iteration by the orchestrator.
+
+redteam:
+  meta_objective: "I want a policy that can robustly put any fruit into any container."
+  tasks_per_iteration: 3
+  run_dir_root: outputs/redteam
+
+  llm:
+    # backend: "openai" -- OpenAI chat API (default), needs network + OPENAI_API_KEY.
+    # backend: "local"  -- Gemma 3 via transformers on local GPU (no network);
+    #                      set model_id: google/gemma-3-27b-it.
+    backend: openai
+    model_id: gpt-5-mini
+    api_key_env: OPENAI_API_KEY
+    temperature: 0.8
+    # gpt-5 reasoning tokens count against this budget; raise it if JSON gets cut off.
+    max_new_tokens: 4096
+    # Cap how many past iterations are replayed into the LLM context. The full
+    # history.json is always kept on disk regardless.
+    history_window: 12
+
+  multiview:
+    script: external/diffusers/examples/inference/multiview_droid_with_nanobanana.py
+    checkpoint_path: checkpoints/multiview_droid_v0
+    wrist_input: external/diffusers/assets/droid/wrist.jpg
+    side_cond:
+      - external/diffusers/assets/droid/side1.jpg
+      - external/diffusers/assets/droid/side2.jpg
+    google_api_key_env: GOOGLE_API_KEY
+    num_inference_steps: 50
+
+  # Robot proprioceptive state for every generated case. Only the `initial_state`
+  # block of this file is consumed; `instruction` is overridden per case with the
+  # LLM-emitted robot_instruction.
+  template_initialization: configs/redteam/template_initialization.yaml
+
+  # World-model view resolution (W, H). Multiview outputs are 640x352 / 640x320 and
+  # are resized to this before being written into the suite.
+  view_target_size: [320, 192]
+
+  # Maps multiview output filenames to world-model view names.
+  view_mapping:
+    wrist: edited_wrist.jpg
+    exterior_left: pred_side1.jpg
+    exterior_right: pred_side2.jpg
+
+# --- standard evaluation config, passed through to generate_videos.py ---
+
+world_model:
+  name: vidwm
+  checkpoint_path: checkpoints/wm/checkpoint-120000.pt
+  params:
+    svd_model_path: external/stable-video-diffusion-img2vid
+    clip_model_path: external/clip-vit-base-patch32
+    debug: false
+    debug_log_limit: 3
+    num_frames: 5
+    num_history: 6
+    action_dim: 7
+    action_downsample: 1
+    width: 320
+    height: 192
+    num_inference_steps: 50
+    decode_to_rgb: true
+
+policy:
+  name: dp
+  checkpoint_path: outputs/dppo-pretrain/v0_carrot_0108_v0_success/2026-03-24_11-07-03_42/checkpoint/state_1000.pt
+  params:
+    repo_path: external/dsrl/dppo
+    config_path: configs/training/tmp_dppo_pretrain_0108_v0_success.yaml
+    normalization_path: data/dppo_processed/0108_v0_success/normalization.npz
+    ordered_obs_keys: ["joint_positions", "gripper_position"]
+    view_names: ["wrist", "exterior_right"]
+    stacked_view_order: [exterior_left, exterior_right, wrist]
+    camera_indices: [0, 1]
+    device: cuda
+
+# Scoring backend. Two options:
+#   name: vlm        -- (default) a VLM judges the last frame of EVERY world-model
+#                       interaction inline during the rollout and returns a 0-1
+#                       score; the scalar fed to the LLM is the max across
+#                       interactions (so premature success is still credited).
+#                       backend: openai (gpt-5-mini) or gemini (gemini-2.5-flash).
+#                       Needs network + the relevant API key on the rollout node.
+#   name: robometer  -- learned progress model, scored post-hoc on saved videos
+#                       in its own uv project under external/robometer (stage D).
+reward_model:
+  name: vlm
+  params:
+    backend: openai
+    model_id: gpt-5-mini
+    api_key_env: OPENAI_API_KEY
+    max_retries: 3
+    # gpt-5 reasoning tokens count against this; raise it if scores come back empty.
+    max_output_tokens: 2048
+    # Optional override; {instruction} is filled in per case.
+    # prompt: |
+    #   You are an impartial robot-manipulation evaluator. The image is the
+    #   latest frame of a robot attempting: "{instruction}". Respond with a
+    #   single number between 0 and 1 for how completely the task is done.
+    #   Output only the number.
+  # To score with robometer instead, replace the block above with:
+  # name: robometer
+  # params:
+  #   model_path: robometer/Robometer-4B
+  #   fps: 2.0
+  #   success_threshold: 0.8
+  # To use the Gemini VLM instead of OpenAI, set backend: gemini,
+  # model_id: gemini-2.5-flash, api_key_env: GOOGLE_API_KEY.
+
+scheduler:
+  chunk_size: 15
+
+duration: 10
+action_hz: 15

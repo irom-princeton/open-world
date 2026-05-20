@@ -1,0 +1,26 @@
+initial_state:
+  robot:
+    state_representation: cartesian_position_with_gripper
+    state:
+      - 0.3516902029514313
+      - 0.015333493240177631
+      - 0.47845712304115295
+      - 3.129768417005107
+      - -0.009063092255148009
+      - -0.03805739490530872
+      - 0.0
+    joint_position:
+      - 0.005526440683752298
+      - -0.6534815430641174
+      - 0.034633129835128784
+      - -2.5614986419677734
+      - 0.009155582636594772
+      - 1.91649329662323
+      - 0.06815838068723679
+    gripper_position: 0.0
+instruction: put the banana in the bowl
+metadata:
+  suite: irom_test_nanobanana
+  scene: irom
+  task_type: pick_and_place
+  state_length: 7
