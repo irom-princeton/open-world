@@ -91,10 +91,11 @@ class OpenPILiberoActionAdapter:
             raise ValueError(f"current_eef_pose must be {self.action_dim - 1} or {self.action_dim} dim")
         cur_pose = cur_pose.reshape(1, self.action_dim)
 
+        # pi05_libero emits an 8-dim padded chunk (openpi LiberoOutputs slices
+        # to [:, :8]); the LIBERO env action is 7-dim (delta-EEF + gripper),
+        # so trim the trailing padding dim before clipping the gripper.
         delta_chunk = raw[:, : self.action_dim].copy()
-        # The LIBERO env consumes the policy's raw output directly; we
-        # forward it as-is, only clamping the gripper if requested.
-        env_actions = raw.copy()
+        env_actions = raw[:, : self.action_dim].copy()
         env_actions[:, -1] = np.clip(env_actions[:, -1], -self.gripper_max, self.gripper_max)
         delta_chunk[:, -1] = env_actions[:, -1]
 

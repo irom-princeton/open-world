@@ -34,6 +34,36 @@ from openworld.world_models.vidwm_loader import ensure_vidwm_repo_on_path
 logger = logging.getLogger(__name__)
 
 
+# Per-dataset action-state percentile presets.  Selected via
+# ``VidWMConfig.action_stats_preset``.  Each entry is a dict with
+# ``state_01`` and ``state_99`` lists matching ``action_dim``.
+DATASET_STATS: Dict[str, Dict[str, tuple[float, ...]]] = {
+    "droid": {
+        "state_01": (
+            0.2676655471324921, -0.441715806722641, -0.042784303426742554,
+            -3.1373724937438965, -1.214390754699707, -2.11581574678421, 0.0,
+        ),
+        "state_99": (
+            0.781050771474838, 0.4366717040538788, 0.7843997478485107,
+            3.137465238571167, 0.9039141565561147, 1.9915846586227417,
+            0.9911894202232361,
+        ),
+    },
+    "libero": {
+        "state_01": (
+            -0.3979538083076477, -0.27001485228538513, 0.03933028131723404,
+            1.507177710533142, -2.747032880783081, -1.0739713907241821,
+            -0.007673494517803192,
+        ),
+        "state_99": (
+            0.1349615454673767, 0.3326720893383026, 1.269497036933899,
+            3.2740728855133057, 2.4267804622650146, 0.591432511806488,
+            0.008920674212276936,
+        ),
+    },
+}
+
+
 @dataclass
 class VidWMConfig:
     """Configuration for the VidWM world model."""
@@ -107,15 +137,9 @@ class VidWMConfig:
     #   normed = 2*(action - p01) / (p99 - p01 + eps) - 1
     action_normalize: bool = True
     action_stat_path: Optional[str] = None
-    action_state_p01: tuple[float, ...] = (
-        0.2676655471324921, -0.441715806722641, -0.042784303426742554,
-        -3.1373724937438965, -1.214390754699707, -2.11581574678421, 0.0,
-    )
-    action_state_p99: tuple[float, ...] = (
-        0.781050771474838, 0.4366717040538788, 0.7843997478485107,
-        3.137465238571167, 0.9039141565561147, 1.9915846586227417,
-        0.9911894202232361,
-    )
+    action_stats_preset: Optional[str] = None  # key into DATASET_STATS, e.g. "droid", "libero"
+    action_state_p01: tuple[float, ...] = DATASET_STATS["droid"]["state_01"]
+    action_state_p99: tuple[float, ...] = DATASET_STATS["droid"]["state_99"]
 
 
 class VidWMWorldModel(WorldModel):
@@ -131,13 +155,23 @@ class VidWMWorldModel(WorldModel):
         elif isinstance(config, dict):
             config = VidWMConfig(**config)
 
-        # Load normalization stats from JSON file if provided
+        # Resolve action normalization stats.  Precedence: explicit JSON
+        # path > named preset > inline p01/p99 values (default = DROID).
         if config.action_stat_path is not None:
             import json
             with open(config.action_stat_path) as f:
                 stats = json.load(f)
             config.action_state_p01 = tuple(stats["state_01"])
             config.action_state_p99 = tuple(stats["state_99"])
+        elif config.action_stats_preset is not None:
+            if config.action_stats_preset not in DATASET_STATS:
+                raise ValueError(
+                    f"Unknown action_stats_preset {config.action_stats_preset!r}; "
+                    f"known presets: {sorted(DATASET_STATS)}"
+                )
+            preset = DATASET_STATS[config.action_stats_preset]
+            config.action_state_p01 = tuple(preset["state_01"])
+            config.action_state_p99 = tuple(preset["state_99"])
 
         self.config = config
 
@@ -359,7 +393,7 @@ class VidWMWorldModel(WorldModel):
                 image=current_latent,
                 text=action_combined,
                 width=cfg.width,
-                height=cfg.height * 3,  # 3 camera views stacked
+                height=cfg.height * len(cfg.view_order),  # camera views stacked along H
                 num_frames=cfg.num_frames,
                 history=history_latents,
                 num_inference_steps=cfg.num_inference_steps,
