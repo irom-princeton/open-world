@@ -81,7 +81,7 @@ class VidWMConfig:
 
     # Whether to decode latents to RGB (set False to stay in latent space)
     decode_to_rgb: bool = True
-    view_order: tuple[str, ...] = ("exterior_right", "exterior_left", "wrist")
+    view_order: tuple[str, ...] = ("exterior_left", "exterior_right", "wrist")
     action_downsample: int = 1
 
     # History indices – selects which entries from the growing per-rollout

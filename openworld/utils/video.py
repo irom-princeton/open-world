@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 def render_observation_frame(
     observation: Any,
     *,
-    view_order: tuple[str, ...] = ("exterior_right", "exterior_left", "wrist"),
+    view_order: tuple[str, ...] = ("exterior_left", "exterior_right", "wrist"),
 ):
     """Render an observation into a single RGB frame for video export."""
     import numpy as np

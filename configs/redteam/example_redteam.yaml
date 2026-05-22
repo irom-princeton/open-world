@@ -64,24 +64,41 @@ world_model:
     num_frames: 5
     num_history: 6
     action_dim: 7
+    # Must match the world-model training stride: chunk_size / action_downsample
+    # should equal num_frames(5). With pi0's chunk_size=5 that means
+    # action_downsample=1 (5/1=5). Mismatching this feeds the WM actions at the
+    # wrong temporal scale and produces badly degraded rollouts.
     action_downsample: 1
     width: 320
     height: 192
     num_inference_steps: 50
     decode_to_rgb: true
+    # Known-good stacking order for this WM checkpoint. The policy's
+    # stacked_view_order below must match this so the correct camera tile is
+    # read back out of each rollout frame.
+    view_order: [exterior_left, exterior_right, wrist]
 
 policy:
-  name: dp
-  checkpoint_path: outputs/dppo-pretrain/v0_carrot_0108_v0_success/2026-03-24_11-07-03_42/checkpoint/state_1000.pt
+  name: openpi
+  checkpoint_path: gs://openpi-assets/checkpoints/pi0_droid
   params:
-    repo_path: external/dsrl/dppo
-    config_path: configs/training/tmp_dppo_pretrain_0108_v0_success.yaml
-    normalization_path: data/dppo_processed/0108_v0_success/normalization.npz
-    ordered_obs_keys: ["joint_positions", "gripper_position"]
-    view_names: ["wrist", "exterior_right"]
+    config_name: pi0_droid
+    repo_path: external/openpi
+    pytorch_device: cuda
+    debug: false
+    debug_log_limit: 3
+    exterior_view_name: exterior_left
+    wrist_view_name: wrist
+    # Must match the world_model view_order above so the correct camera tile is
+    # read back out of each stacked rollout frame.
     stacked_view_order: [exterior_left, exterior_right, wrist]
-    camera_indices: [0, 1]
-    device: cuda
+    resize_height: 224
+    resize_width: 224
+    joint_position_dim: 7
+    action_adapter_checkpoint_path: checkpoints/action_adapter/model2_15_9.pth
+    intermediate_resize_height: 180
+    policy_skip_step: 2
+    num_action_steps: 5
 
 # Scoring backend. Two options:
 #   name: vlm        -- (default) a VLM judges the last frame of EVERY world-model
@@ -117,7 +134,7 @@ reward_model:
   # model_id: gemini-2.5-flash, api_key_env: GOOGLE_API_KEY.
 
 scheduler:
-  chunk_size: 15
+  chunk_size: 5
 
 duration: 10
-action_hz: 15
+action_hz: 5

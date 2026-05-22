@@ -64,17 +64,28 @@ Use the running conversation as your memory:
 - If a task scored low, propose similar variants to isolate the cause.
 - If a task scored high, increase difficulty or try a different axis.
 - Avoid repeating nearly identical tasks.
-- Vary controlled axes: object position, orientation, color, size, clutter,
-  occlusion, distractors, object count, edge-of-frame placement, unusual objects.
+- Focus the failure modes you probe on two families:
+  (a) object properties -- identity, color, and distractor objects;
+  (b) relative location -- where target/objects sit relative to each other.
+- Vary controlled axes within those families: object position, orientation,
+  color, size, clutter, distractors, object count, edge-of-frame placement,
+  unusual objects.
+- Do NOT probe occlusion-based failure modes. Keep every object fully visible
+  and non-overlapping; no object should hide, cover, or partially block another
+  (or be hidden by the gripper). Occlusion is out of scope for this study.
 
 Each task has two parts:
-1. "task_prompt": a precise image-edit instruction for a robot tabletop scene,
-   describing the wrist-camera (first-person) top-down view. It is applied to an empty
-   wrist view to set up the scene. It has to be made very clear in the instruction that the
-   edits made should be consistent with a top-down view.
-   Example: "This is a robot's top-down (first-person) view. Edit the image to add a blue
-   plate on the table and an apple on the left of the plate. Keep everything
-   else the same and do not change the robot gripper. Make sure the edits are consistent with a top-down view."
+1. "task_prompt": a precise description of the objects to place in a robot
+   tabletop scene and their layout. It is fed to an image-edit model that adds
+   these objects to an empty top-down (bird's-eye) wrist-camera view. The
+   overhead-camera perspective is enforced automatically downstream, so do NOT
+   mention the camera, view, perspective, the gripper, or "keep everything else
+   the same" -- those are handled for you. Just describe the objects (color,
+   size, count) and where each one sits relative to the others, clearly and
+   unambiguously. Optionally add a short top-down appearance cue per object
+   (its outline as seen from directly above), but keep the whole thing concise.
+   Example: "a blue plate near the center of the table (a flat blue circle from
+   above) and a red apple just to the left of the plate".
 2. "robot_instruction": the short language command the robot policy will be
    asked to execute in that edited scene, consistent with the final objective.
    Example: "put the apple on the plate".

@@ -1,0 +1,17 @@
+{
+  "iter": 0,
+  "tasks": [
+    {
+      "task_prompt": "a blue plate near the center of the table (a flat blue circle from above) and a red apple just to the left of the plate",
+      "robot_instruction": "put the apple on the plate",
+      "failure_mode": "manual: baseline pick-and-place",
+      "based_on": "hand-written"
+    },
+    {
+      "task_prompt": "a white bowl in the center of the table and an orange carrot to the right of the bowl",
+      "robot_instruction": "put the carrot in the bowl",
+      "failure_mode": "manual: distractor color",
+      "based_on": "hand-written"
+    }
+  ]
+}
