@@ -48,7 +48,11 @@ def get_args() -> LiberoWMArgs:
         num_frames=5,
         num_history=6,
         action_dim=7,
-        down_sample=4,
+        down_sample=1,    # see libero_wm.py: T_state == T_latent, 1:1 pairing.
+                          # WARNING: shortcut models distill from a teacher --
+                          # if the teacher was trained with down_sample=4, the
+                          # student needs the same down_sample or the action
+                          # input distribution will mismatch the teacher's.
 
         # ----- Shortcut training -----
         flow_map_type="shortcut",

@@ -10,7 +10,9 @@ Key differences from DROID:
   plus the absolute gripper command, normalized to [-1, 1] using percentile
   stats from ``dataset_meta_info/<suite>/stat.json`` (or, as a fallback,
   ``dataset_meta_info/libero/stat.json``).
-* ``down_sample`` defaults to 4 (20 Hz -> 5 Hz) instead of 3.
+* On-disk latents and states both live at the WM prediction rate (5 Hz),
+  pre-strided by the preprocessor / collector. ``down_sample`` is therefore
+  1 by default (indexing latents and states 1:1).
 
 The on-disk format is what ``scripts/preprocess_libero_for_wm.py`` writes:
 
@@ -158,9 +160,11 @@ class LiberoLatentDataset(Dataset):
         with open(ann_file) as f:
             label = json.load(f)
 
-        # Frame indices live in WM-rate units (e.g. 5 Hz for default config).
-        # State arrays in the annotation live at native (20 Hz) rate, so we
-        # multiply by down_sample to index them.
+        # Frame indices live in WM-rate units. Both latents and state arrays
+        # on disk are pre-strided to the same WM rate by the
+        # preprocessor / collector, so with down_sample == 1 this is the
+        # identity. down_sample > 1 is retained only for legacy data where
+        # states were stored at a higher native rate than latents.
         joint_len = len(label["observation.state.cartesian_position"]) - 1
         frame_len = int(np.floor(joint_len / self.args.down_sample))
         frame_now = int(frame_ids[0])

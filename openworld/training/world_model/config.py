@@ -37,6 +37,10 @@ class LiberoWMArgs:
     svd_model_path: str = "external/stable-video-diffusion-img2vid"
     clip_model_path: str = "external/clip-vit-base-patch32"
     ckpt_path: str | None = None  # initial WM weights, e.g. checkpoint-10000.pt
+    # Optional AdamW optimizer state saved by a previous run (see train_wm.py
+    # `optimizer-<step>.pt`). Carries momentum/variance across orchestrated
+    # FT cycles so each cycle isn't ~hundreds of steps of warm-up noise.
+    optimizer_state_path: str | None = None
 
     # ---------------- dataset -----------------------
     dataset_root_path: str = "data/libero_processed"
@@ -50,9 +54,17 @@ class LiberoWMArgs:
     prob: tuple[float, ...] = (0.2, 0.2, 0.2, 0.2, 0.2)
     annotation_name: str = "annotation"
     num_workers: int = 4
-    # 20 Hz LIBERO -> 5 Hz WM rate: down_sample=4 is the natural analog of
-    # DROID's 15Hz/3 = 5Hz.
-    down_sample: int = 4
+    # Preprocessed LIBERO data has T_state == T_latent (latents already at
+    # 20 Hz, see scripts/preprocess_libero_for_wm.py), so the natural
+    # pairing is down_sample=1: state_id = rgb_id, frame_len = T_state.
+    # The historical default of 4 (from a DROID analog "5 Hz WM rate")
+    # caused dataset.py to clip rgb_id to T_state//4 -- training only on
+    # the first 25% of each trajectory, with state lookup at state[rgb_id*4]
+    # which paired a latent at time t/20s with state at time t/5s.
+    # Legacy LIBERO checkpoints (libero_0429/checkpoint-36000.pt) were
+    # trained with the old default; FT'ing them under the new default will
+    # show a transient loss bump as the model adapts to the corrected pairing.
+    down_sample: int = 1
     skip_step: int = 1
 
     # ---------------- logging -----------------------

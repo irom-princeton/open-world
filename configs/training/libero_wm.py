@@ -16,8 +16,8 @@ def get_args() -> LiberoWMArgs:
         ckpt_path=None,  # set to e.g. checkpoints/wm/checkpoint-120000.pt to warm-start
 
         # ----- Dataset -----
-        dataset_root_path="data/wm_training/libero_processed",
-        dataset_meta_info_path="data/wm_training/libero_processed",
+        dataset_root_path="data/wm_training/libero_processed_5hz",
+        dataset_meta_info_path="data/wm_training/libero_processed_5hz",
         dataset_names="libero_spatial+libero_object+libero_goal+libero_10",
         dataset_cfgs="libero_spatial+libero_object+libero_goal+libero_10",
         prob=(0.25, 0.25, 0.25, 0.25),
@@ -32,7 +32,7 @@ def get_args() -> LiberoWMArgs:
         learning_rate=1e-5,
         max_train_steps=500_000,
         checkpointing_steps=2_000,
-        validation_steps=2_00,
+        validation_steps=2_000,
         max_grad_norm=1.0,
 
         # ----- Architecture (LIBERO-specific) -----
@@ -40,7 +40,11 @@ def get_args() -> LiberoWMArgs:
         num_frames=5,
         num_history=6,
         action_dim=7,          # 6 EEF + 1 gripper
-        down_sample=4,         # 20 Hz -> 5 Hz
+        # preprocess_libero_for_wm.py now temporally subsamples the raw 20 Hz
+        # LIBERO demos by 4 before encoding, so on-disk latents and state
+        # arrays both live at 5 Hz with T_state == T_latent. The loader
+        # therefore pairs them 1:1 (down_sample=1).
+        down_sample=1,
 
         # ----- Loss / sampling defaults -----
         flow_map_type="flow_matching",

@@ -176,7 +176,10 @@ def validate_video_generation(
         if wandb.run is not None:
             steps_tag = Path(videos_dir).name
             accelerator.log(
-                {f"val_video/{steps_tag}/sample_{sample_id}": wandb.Video(str(fname), fps=2, format="mp4")},
+                # `fps` is ignored (and warned about) when passing a file path:
+                # the encoded mp4 already carries its own framerate. Set it via
+                # imageio when writing the file if you need a different rate.
+                {f"val_video/{steps_tag}/sample_{sample_id}": wandb.Video(str(fname), format="mp4")},
                 step=train_steps,
             )
     except Exception as e:
@@ -203,8 +206,17 @@ def main(args: LiberoWMArgs) -> None:
     model = CrtlWorld(args)
     if args.ckpt_path is not None:
         logger.info(f"Loading checkpoint from {args.ckpt_path}")
-        state_dict = torch.load(args.ckpt_path, map_location="cpu")
+        # mmap=True keeps the on-disk file paged in lazily so each DDP rank
+        # shares OS-cached pages instead of duplicating 9 GB of fp32 weights
+        # in process-private RAM. Without it, N-way DDP needs N× the model
+        # size in CPU RAM during load, which OOM-kills on smaller nodes.
+        try:
+            state_dict = torch.load(args.ckpt_path, map_location="cpu", mmap=True)
+        except TypeError:
+            state_dict = torch.load(args.ckpt_path, map_location="cpu")
         model.load_state_dict(state_dict, strict=False)
+        del state_dict
+        import gc; gc.collect()
     model.to(accelerator.device)
     model.train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
@@ -247,6 +259,25 @@ def main(args: LiberoWMArgs) -> None:
         model, optimizer, train_loader, val_loader
     )
 
+    if getattr(args, "optimizer_state_path", None):
+        if os.path.isfile(args.optimizer_state_path):
+            logger.info(f"Loading optimizer state from {args.optimizer_state_path}")
+            opt_state = torch.load(args.optimizer_state_path, map_location="cpu")
+            optimizer.load_state_dict(opt_state)
+            # State is loaded onto CPU; AdamW.step() requires state tensors to
+            # match the parameter device or we hit a runtime device-mismatch.
+            for param_state in optimizer.state.values():
+                for k, v in param_state.items():
+                    if isinstance(v, torch.Tensor):
+                        param_state[k] = v.to(accelerator.device)
+            del opt_state
+            import gc; gc.collect()
+        else:
+            logger.warning(
+                f"optimizer_state_path set but missing: {args.optimizer_state_path}; "
+                f"starting with fresh optimizer state."
+            )
+
     total_batch = (
         args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
     )
@@ -288,43 +319,46 @@ def main(args: LiberoWMArgs) -> None:
                 if global_step % args.checkpointing_steps == 0 and accelerator.is_main_process:
                     save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}.pt")
                     torch.save(accelerator.unwrap_model(model).state_dict(), save_path)
-                    logger.info(f"Saved checkpoint to {save_path}")
-                if (
-                    global_step % args.validation_steps == 5
-                    and accelerator.is_main_process
-                ):
+                    opt_path = os.path.join(args.output_dir, f"optimizer-{global_step}.pt")
+                    torch.save(optimizer.state_dict(), opt_path)
+                    logger.info(f"Saved checkpoint to {save_path} (+ {opt_path})")
+                if global_step % args.validation_steps == 5:
                     model.eval()
                     with torch.no_grad():
                         with accelerator.autocast():
-                            val_loss_sum = 0.0
+                            val_loss_sum = torch.zeros(1, device=accelerator.device)
                             val_count = 0
                             for vbatch in val_loader:
                                 vloss, _ = model(vbatch)
-                                val_loss_sum += float(vloss.item())
+                                val_loss_sum = val_loss_sum + vloss.detach().reshape(1)
                                 val_count += 1
                                 if val_count >= 50:  # cap to keep validation cheap
                                     break
                             if val_count:
-                                accelerator.log(
-                                    {"val_loss": val_loss_sum / val_count},
-                                    step=global_step,
-                                )
-                            for sid in range(args.video_num):
-                                ds = train_dataset if args.use_train_set_for_val else val_dataset
-                                test_steps = list(args.test_num_inference_steps)
-                                if test_steps:
-                                    for steps in test_steps:
+                                gathered = accelerator.gather(val_loss_sum / val_count).mean()
+                                if accelerator.is_main_process:
+                                    accelerator.log(
+                                        {"val_loss": gathered.item()},
+                                        step=global_step,
+                                    )
+                            if accelerator.is_main_process:
+                                for sid in range(args.video_num):
+                                    ds = train_dataset if args.use_train_set_for_val else val_dataset
+                                    test_steps = list(args.test_num_inference_steps)
+                                    if test_steps:
+                                        for steps in test_steps:
+                                            validate_video_generation(
+                                                model, ds, args, global_step,
+                                                f"{args.output_dir}/steps_{steps}",
+                                                sid, accelerator, pipeline_cls, inference_steps=steps,
+                                            )
+                                    else:
                                         validate_video_generation(
                                             model, ds, args, global_step,
-                                            f"{args.output_dir}/steps_{steps}",
-                                            sid, accelerator, pipeline_cls, inference_steps=steps,
+                                            f"{args.output_dir}/steps_{args.num_inference_steps}",
+                                            sid, accelerator, pipeline_cls,
                                         )
-                                else:
-                                    validate_video_generation(
-                                        model, ds, args, global_step,
-                                        f"{args.output_dir}/steps_{args.num_inference_steps}",
-                                        sid, accelerator, pipeline_cls,
-                                    )
+                    accelerator.wait_for_everyone()
                     model.train()
                 if global_step >= args.max_train_steps:
                     break
@@ -347,6 +381,7 @@ def cli() -> None:
     parser.add_argument("--dataset_meta_info_path", type=str, default=None)
     parser.add_argument("--dataset_names", type=str, default=None)
     parser.add_argument("--tag", type=str, default=None)
+    parser.add_argument("--output_dir", type=str, default=None)
     cli_args = parser.parse_args()
 
     args = _load_config(cli_args.config)
@@ -358,6 +393,8 @@ def cli() -> None:
         # re-derive output_dir
         args.output_dir = f"checkpoints/wm_libero/{args.tag}"
         args.wandb_run_name = args.tag
+    if cli_args.output_dir is not None:
+        args.output_dir = cli_args.output_dir
 
     main(args)
 
