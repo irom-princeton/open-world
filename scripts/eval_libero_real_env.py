@@ -55,12 +55,36 @@ def _quat2axisangle(quat):
     return (quat[:3] * 2.0 * math.acos(quat[3]) / den).astype(np.float32)
 
 
+def _enable_legacy_torch_load() -> None:
+    """Let LIBERO load its bundled init-state files under PyTorch >=2.6.
+
+    LIBERO's ``benchmark.get_task_init_states`` does a bare
+    ``torch.load(<task>.pruned_init)`` on files that are just pickled numpy
+    arrays. PyTorch 2.6 flipped ``torch.load``'s default to
+    ``weights_only=True``, which refuses to unpickle them. These files ship
+    with LIBERO and are trusted, so restore the pre-2.6 behavior.
+    """
+    import torch
+
+    if getattr(torch.load, "_libero_legacy", False):
+        return
+    _orig_load = torch.load
+
+    def _load(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return _orig_load(*args, **kwargs)
+
+    _load._libero_legacy = True
+    torch.load = _load
+
+
 def _ensure_openpi_paths(openpi_repo: str) -> None:
     if openpi_repo not in sys.path:
         sys.path.insert(0, openpi_repo)
         sys.path.insert(0, str(pathlib.Path(openpi_repo) / "src"))
         sys.path.insert(0, str(pathlib.Path(openpi_repo) / "packages" / "openpi-client" / "src"))
         sys.path.insert(0, str(pathlib.Path(openpi_repo) / "third_party" / "libero"))
+    _enable_legacy_torch_load()
 
 
 def main() -> None:
@@ -150,7 +174,10 @@ def main() -> None:
                     chunk = policy.infer(element)["actions"]
                     action_plan.extend(chunk[: args.replan_steps])
 
-                action = action_plan.popleft()
+                # pi0 emits an 8-D action (padded action_dim); LIBERO's
+                # OSC_POSE controller wants 7 (6 EEF delta + 1 gripper) -- drop
+                # the padding at index 7. See docs/LIBERO.md sec 1.2.
+                action = action_plan.popleft()[:7]
                 obs, _, done, _ = env.step(action.tolist() if hasattr(action, "tolist") else list(action))
                 if done:
                     hits += 1

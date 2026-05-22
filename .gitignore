@@ -15,6 +15,7 @@ env/
 *.ckpt
 wandb/
 outputs/
+test/
 logs/
 models/
 videos/

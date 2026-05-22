@@ -12,17 +12,23 @@ Each annotation JSON looks like::
 
     {
         "texts": ["pick up the alphabet soup ..."],
-        "observation.state.cartesian_position": [[x,y,z,ax,ay,az], ...],   # (T, 6)
-        "observation.state.gripper_position":  [g, g, ...],                # (T,)
+        "observation.state.cartesian_position": [[x,y,z,ax,ay,az], ...],   # (T_wm, 6)
+        "observation.state.gripper_position":  [g, g, ...],                # (T_wm,)
         "latent_videos": [
             {"latent_video_path": "latent_videos/agentview/00000.pt", "cam": "agentview"},
             {"latent_video_path": "latent_videos/wrist/00000.pt",     "cam": "wrist"}
         ],
-        "fps": 20,
+        "fps": 5,
         "down_sample": 1,
         "task_suite": "libero_spatial",
         "language_instruction": "..."
     }
+
+Frames are temporally subsampled by ``--down_sample`` (default 4) before
+encoding, so the on-disk latents AND state arrays both live at the WM rate
+(20 Hz / down_sample = 5 Hz by default). The annotation reports the
+post-subsample rate as ``fps`` and ``down_sample: 1``, so the training-time
+dataset loader can pair latents and states 1:1.
 
 LIBERO's published demos are HDF5 files (one per BDDL task) with groups
 ``data/demo_<n>`` containing ``actions``, ``obs/agentview_rgb``,
@@ -86,6 +92,28 @@ def _read_attr(grp: h5py.Group, key: str, default: str | None = None) -> str | N
     if isinstance(val, bytes):
         val = val.decode("utf-8")
     return val
+
+
+def _write_mp4(path: Path, frames_thwc_uint8: np.ndarray, fps: int) -> None:
+    """Write (T, H, W, 3) uint8 frames to ``path`` as an H.264 mp4.
+
+    ``macro_block_size=1`` disables imageio-ffmpeg's automatic padding to
+    multiples of 16, so any (H, W) (e.g. 256) is encoded as-is.
+    """
+    import imageio.v2 as imageio
+
+    frames = np.asarray(frames_thwc_uint8)
+    if frames.dtype != np.uint8:
+        frames = frames.astype(np.uint8)
+    writer = imageio.get_writer(
+        str(path), fps=int(max(1, fps)), codec="libx264", quality=8,
+        macro_block_size=1, format="FFMPEG",
+    )
+    try:
+        for frame in frames:
+            writer.append_data(frame)
+    finally:
+        writer.close()
 
 
 # ---------------------------------------------------------------------------
@@ -194,36 +222,62 @@ def write_episode(
     output_root: Path,
     encoder: LatentEncoder | None,
     payload: dict,
+    fps: int,
+    write_raw: bool = False,
+    extra_annotation: dict | None = None,
 ) -> None:
+    """Write one episode in the WM training-data layout.
+
+    Always writes the annotation JSON. Writes latent ``.pt`` files when an
+    ``encoder`` is supplied, and raw ``.mp4`` videos when ``write_raw`` is
+    set. ``extra_annotation`` is merged into the annotation dict (used by
+    the policy collector to stamp ``task_id``, ``is_success``, etc.).
+    """
     suite_root = output_root / suite
     ann_dir = suite_root / "annotation" / split
-    agent_dir = suite_root / "latent_videos" / "agentview"
-    wrist_dir = suite_root / "latent_videos" / "wrist"
     ann_dir.mkdir(parents=True, exist_ok=True)
-    agent_dir.mkdir(parents=True, exist_ok=True)
-    wrist_dir.mkdir(parents=True, exist_ok=True)
 
     agent_path = f"latent_videos/agentview/{episode_id}.pt"
     wrist_path = f"latent_videos/wrist/{episode_id}.pt"
 
+    latent_videos_meta: list[dict] = []
     if encoder is not None:
+        (suite_root / "latent_videos" / "agentview").mkdir(parents=True, exist_ok=True)
+        (suite_root / "latent_videos" / "wrist").mkdir(parents=True, exist_ok=True)
         torch.save(encoder.encode(payload["agent_rgb"]), suite_root / agent_path)
         torch.save(encoder.encode(payload["wrist_rgb"]), suite_root / wrist_path)
+        latent_videos_meta = [
+            {"latent_video_path": agent_path, "cam": "agentview"},
+            {"latent_video_path": wrist_path, "cam": "wrist"},
+        ]
+
+    raw_videos_meta: list[dict] = []
+    if write_raw:
+        raw_agent_path = f"raw_videos/agentview/{episode_id}.mp4"
+        raw_wrist_path = f"raw_videos/wrist/{episode_id}.mp4"
+        (suite_root / "raw_videos" / "agentview").mkdir(parents=True, exist_ok=True)
+        (suite_root / "raw_videos" / "wrist").mkdir(parents=True, exist_ok=True)
+        _write_mp4(suite_root / raw_agent_path, payload["agent_rgb"], fps)
+        _write_mp4(suite_root / raw_wrist_path, payload["wrist_rgb"], fps)
+        raw_videos_meta = [
+            {"video_path": raw_agent_path, "cam": "agentview"},
+            {"video_path": raw_wrist_path, "cam": "wrist"},
+        ]
 
     annotation = {
         "texts": [payload["language"]],
         "language_instruction": payload["language"],
         "task_suite": suite,
         "bddl": payload["bddl"],
-        "fps": 20,
+        "fps": fps,
         "down_sample": 1,
         "observation.state.cartesian_position": payload["cart"].tolist(),
         "observation.state.gripper_position": payload["grip"].tolist(),
-        "latent_videos": [
-            {"latent_video_path": agent_path, "cam": "agentview"},
-            {"latent_video_path": wrist_path, "cam": "wrist"},
-        ],
+        "latent_videos": latent_videos_meta,
+        "raw_videos": raw_videos_meta,
     }
+    if extra_annotation:
+        annotation.update(extra_annotation)
     with open(ann_dir / f"{episode_id}.json", "w") as f:
         json.dump(annotation, f)
 
@@ -294,9 +348,17 @@ def main() -> None:
     ap.add_argument("--num_history", type=int, default=6)
     ap.add_argument("--num_frames", type=int, default=5)
     ap.add_argument("--down_sample", type=int, default=4,
-                    help="20Hz LIBERO downsampled to (20/down_sample) Hz for WM training. "
-                         "Default 4 -> 5Hz (matches DROID 15Hz/3).")
+                    help="Temporally subsample raw 20Hz LIBERO frames by this stride "
+                         "before encoding. Both latents and state arrays end up at "
+                         "(20/down_sample) Hz on disk. Default 4 -> 5Hz "
+                         "(matches DROID 15Hz/3).")
+    ap.add_argument("--raw_fps", type=int, default=20,
+                    help="Native LIBERO recording rate. Saved annotations report "
+                         "fps = raw_fps // down_sample.")
     args = ap.parse_args()
+    if args.down_sample < 1:
+        raise SystemExit("--down_sample must be >= 1")
+    out_fps = args.raw_fps // args.down_sample
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
@@ -327,6 +389,12 @@ def main() -> None:
             for ep in iter_episodes(hdf5_path):
                 if args.max_episodes_per_suite is not None and episode_counter >= args.max_episodes_per_suite:
                     break
+                if args.down_sample > 1:
+                    s = args.down_sample
+                    ep["agent_rgb"] = ep["agent_rgb"][::s]
+                    ep["wrist_rgb"] = ep["wrist_rgb"][::s]
+                    ep["cart"] = ep["cart"][::s]
+                    ep["grip"] = ep["grip"][::s]
                 episode_id = f"{episode_counter:06d}"
                 split = "val" if rng.random() < args.val_fraction else "train"
                 payload = ep | {"hdf5_source": hdf5_path.name}
@@ -337,6 +405,7 @@ def main() -> None:
                     output_root=args.output_root,
                     encoder=encoder,
                     payload=payload,
+                    fps=out_fps,
                 )
                 (train_ids if split == "train" else val_ids).append(episode_id)
                 episode_counter += 1
@@ -344,12 +413,14 @@ def main() -> None:
                 continue
             break
 
+        # On-disk data is already at the WM rate, so the sample-list builder
+        # walks it with stride 1.
         write_sample_list(suite_out, "train", train_ids,
                           num_history=args.num_history, num_frames=args.num_frames,
-                          down_sample=args.down_sample)
+                          down_sample=1)
         write_sample_list(suite_out, "val", val_ids,
                           num_history=args.num_history, num_frames=args.num_frames,
-                          down_sample=args.down_sample)
+                          down_sample=1)
 
 
 if __name__ == "__main__":
