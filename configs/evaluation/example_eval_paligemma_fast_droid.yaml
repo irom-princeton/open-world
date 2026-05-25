@@ -9,30 +9,28 @@ world_model:
     num_frames: 5
     num_history: 6
     action_dim: 7
-    action_downsample: 1
+    action_downsample: 3
     width: 320
     height: 192
     num_inference_steps: 4
     decode_to_rgb: true
 
 policy:
-  name: dp
-  checkpoint_path: path/to/dppo/checkpoint.pt
+  name: openpi
+  checkpoint_path: /n/fs/irom-testing/multitest/data/roboarena/model_weights/paligemma_fast_droid
   params:
-    repo_path: external/dsrl/dppo
-    config_path: configs/training/your_dataset.yaml
-    normalization_path: data/dppo_processed/your_dataset/normalization.npz
-    ordered_obs_keys: ["joint_positions", "gripper_position"]
-    view_names: ["wrist", "exterior_right"]
+    config_name: paligemma_fast_droid
+    repo_path: external/openpi
+    pytorch_device: cuda
+    debug: false
+    debug_log_limit: 3
+    exterior_view_name: exterior_right
+    wrist_view_name: wrist
     stacked_view_order: [exterior_left, exterior_right, wrist]
-    camera_indices: [0, 1]
-    device: cuda
-    # DPPO policies emit joint velocities; integrate to joint positions via
-    # the dynamics adapter, then FK to cartesian for the world model.
+    resize_height: 224
+    resize_width: 224
+    joint_position_dim: 7
     action_adapter_checkpoint_path: checkpoints/action_adapter/model2_15_9.pth
-    action_adapter_gripper_max: 1.0
-    policy_skip_step: 3
-    num_action_steps: 5
 
 reward_model:
   name: robometer
@@ -42,9 +40,9 @@ reward_model:
     success_threshold: 0.8
 
 scheduler:
-  chunk_size: 5
+  chunk_size: 15
 
 duration: 10
-action_hz: 5
-video_dir: outputs/irom_test_carrot_dppo_videos
+action_hz: 15
+video_dir: outputs/irom_test_carrot_paligemma_fast_droid_videos
 dataset_path: data/benchmark/irom_test_carrot
