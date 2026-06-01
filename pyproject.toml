@@ -80,7 +80,6 @@ policy-openpi = [
     "websockets>=13.0",
 ]
 policy-dp = [
-    "av==12.3.0",
     "gdown==5.2.0",
     "gym==0.22.0",
     "h5py",

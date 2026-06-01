@@ -147,7 +147,7 @@ class MolmoAct2InProcessRunner:
                 task=str(payload.get("instruction", "")),
                 state=state,
                 norm_tag=self.norm_tag,
-                action_mode=self.action_mode,
+                inference_action_mode=self.action_mode,
                 enable_depth_reasoning=self.enable_depth_reasoning,
                 num_steps=num_steps,
                 normalize_language=self.normalize_language,

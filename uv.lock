@@ -424,74 +424,8 @@ wheels = [
 
 [[package]]
 name = "av"
-version = "12.3.0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version >= '3.14' and platform_machine != 'aarch64' and sys_platform == 'linux'",
-    "python_full_version >= '3.14' and sys_platform == 'darwin'",
-    "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "python_full_version < '3.12' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and platform_machine != 'aarch64' and sys_platform == 'linux'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'darwin'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version < '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version < '3.12' and platform_machine != 'aarch64' and sys_platform == 'linux'",
-    "python_full_version < '3.12' and sys_platform == 'darwin'",
-    "python_full_version < '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-]
-sdist = { url = "https://files.pythonhosted.org/packages/00/f8/5adeeae0c42a7130933d168b8d84a21c98a32cb9fcf9222e2541ed0d9c7b/av-12.3.0.tar.gz", hash = "sha256:04b1892562aff3277efc79f32bd8f1d0cbb64ed011241cb3e96f9ad471816c22", size = 3833953, upload-time = "2024-07-21T04:02:43.708Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/20/256fa4fc4ef9bb46fdc4be4662e13a30b0334487c955961f3816d94db04b/av-12.3.0-cp311-cp311-macosx_10_13_x86_64.whl", hash = "sha256:cc06a806419fddc7102150ffe353c7d96b99b95fd12864280c91c851603fd4cb", size = 24658122, upload-time = "2024-07-21T04:00:39.882Z" },
-    { url = "https://files.pythonhosted.org/packages/5d/45/a9d0475539b4f49deb34f3da558de31cefc6be867d5c0603d575a8485069/av-12.3.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:8e2130ff622a574d3d5d6e88ac335efcdd98c375bb341f87d9fe540830a746f5", size = 19923068, upload-time = "2024-07-21T04:00:42.674Z" },
-    { url = "https://files.pythonhosted.org/packages/af/27/1f2b3e46059c6618fd76ba12a96b49dc8515a426cd477032cd33f80505e8/av-12.3.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8e8b9bd99f916ff4d1278654e94658e6ace7ca60f6321f254d09c8cd81d9095b", size = 32555100, upload-time = "2024-07-21T04:00:45.759Z" },
-    { url = "https://files.pythonhosted.org/packages/28/34/759741d397a8bdbb8a359b8b5d49832a444b26c9a7f79c0f88be76a6b979/av-12.3.0-cp311-cp311-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:9e375d1d89a5c6edfd9f66701fdb6cc9161cc1ff99d15ff0bda21ee1ad38e9e0", size = 31936355, upload-time = "2024-07-21T04:00:48.837Z" },
-    { url = "https://files.pythonhosted.org/packages/b4/6e/77426cb92117c941b0f759908bc83f34f259b11b353acb5de95972b452f7/av-12.3.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ef9066fd8d86548e12d587cbfe7b852159e48ff3c732271c3032668d4bd7c599", size = 34416598, upload-time = "2024-07-21T04:00:52.146Z" },
-    { url = "https://files.pythonhosted.org/packages/ff/d3/4b0fddcd54d0a88ee7e035f239ebb56ce139fac8e02ee0942c43746a66ff/av-12.3.0-cp311-cp311-win_amd64.whl", hash = "sha256:bfaa9864560e43d45d254ed95f70ab1aab24a2fa0cc35ac99eef362f1453bec0", size = 25975217, upload-time = "2024-07-21T04:00:55.724Z" },
-    { url = "https://files.pythonhosted.org/packages/e4/c1/0636bccf5a1a2c935952614b9d34d8d8aae078c9773a60efb5376702f499/av-12.3.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:5174e995772ebe33561980dca625f830aea8d39a4338728dedb41ae7dc2605af", size = 24669628, upload-time = "2024-07-21T04:00:58.643Z" },
-    { url = "https://files.pythonhosted.org/packages/ef/7d/9126abdafe20fa73d2c19fd108450363253cfea283c350618cc1434f473c/av-12.3.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:028d8b40308536f740dace3efd0178eb96825b414897c9594fb74136532901cb", size = 19928928, upload-time = "2024-07-21T04:01:01.506Z" },
-    { url = "https://files.pythonhosted.org/packages/27/75/c1b9e0aa4bd0d8b8311f366b6b38f6c6600d66baddfe2888accc7f76b1f5/av-12.3.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b030791ecc6185776d832d19ce196f61daf3e17e591a9bb6fd181280e1754138", size = 32793461, upload-time = "2024-07-21T04:01:04.62Z" },
-    { url = "https://files.pythonhosted.org/packages/5a/06/1364c445f8a8ab4870f0f5c4530b496257ae09de7fa01b6108525abea8b9/av-12.3.0-cp312-cp312-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:a3703a35481fda5798a27bf6208c1ec3b61c18931625771fb3c9fd870539c7d7", size = 32217647, upload-time = "2024-07-21T04:01:07.549Z" },
-    { url = "https://files.pythonhosted.org/packages/27/08/220d5a1ae7e7830d66d041c71e607c1f5df2e3598b12fb406b0d7c2defa7/av-12.3.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:32f3eef56b2df289db6105f9fe2ebc9a8134a8adbd62190daeb8e22c4ff47794", size = 34746451, upload-time = "2024-07-21T04:01:10.506Z" },
-    { url = "https://files.pythonhosted.org/packages/96/67/9f1c444864d4f3e3773100b9ed20e670f80d5575b7a8fd53cca20de9d681/av-12.3.0-cp312-cp312-win_amd64.whl", hash = "sha256:62d036ee8321d67190887012c3dbcd1ad83248603cc29ea75fbb75835b8d6e6e", size = 25977611, upload-time = "2024-07-21T04:01:13.709Z" },
-]
-
-[[package]]
-name = "av"
 version = "15.1.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.14' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version >= '3.14' and platform_machine != 'aarch64' and sys_platform == 'linux'",
-    "python_full_version >= '3.14' and sys_platform == 'darwin'",
-    "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.13.*' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version == '3.13.*' and platform_machine != 'aarch64' and sys_platform == 'linux'",
-    "python_full_version == '3.12.*' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version == '3.12.*' and platform_machine != 'aarch64' and sys_platform == 'linux'",
-    "python_full_version == '3.13.*' and sys_platform == 'darwin'",
-    "python_full_version == '3.13.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'darwin'",
-    "python_full_version == '3.12.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'emscripten'",
-    "python_full_version < '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version < '3.12' and platform_machine != 'aarch64' and sys_platform == 'linux'",
-    "python_full_version < '3.12' and sys_platform == 'darwin'",
-    "python_full_version < '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-]
 sdist = { url = "https://files.pythonhosted.org/packages/e9/c3/83e6e73d1592bc54436eae0bc61704ae0cff0c3cfbde7b58af9ed67ebb49/av-15.1.0.tar.gz", hash = "sha256:39cda2dc810e11c1938f8cb5759c41d6b630550236b3365790e67a313660ec85", size = 3774192, upload-time = "2025-08-30T04:41:56.076Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/47/58/4e44cf6939be7aba96a4abce024e1be11ba7539ecac74d09369b8c03aa05/av-15.1.0-cp311-cp311-macosx_13_0_arm64.whl", hash = "sha256:b785948762a8d45fc58fc24a20251496829ace1817e9a7a508a348d6de2182c3", size = 21767323, upload-time = "2025-08-30T04:39:37.989Z" },
@@ -2833,7 +2767,7 @@ name = "lerobot"
 version = "0.1.0"
 source = { git = "https://github.com/huggingface/lerobot?rev=0cf864870cf29f4738d3ade893e6fd13fbd7cdb5#0cf864870cf29f4738d3ade893e6fd13fbd7cdb5" }
 dependencies = [
-    { name = "av", version = "15.1.0", source = { registry = "https://pypi.org/simple" } },
+    { name = "av" },
     { name = "cmake" },
     { name = "datasets" },
     { name = "deepdiff" },
@@ -5392,7 +5326,6 @@ dependencies = [
 
 [package.optional-dependencies]
 policy-dp = [
-    { name = "av", version = "12.3.0", source = { registry = "https://pypi.org/simple" } },
     { name = "gdown" },
     { name = "gym" },
     { name = "h5py" },
@@ -5463,7 +5396,6 @@ requires-dist = [
     { name = "accelerate" },
     { name = "accelerate", marker = "extra == 'policy-molmoact2'", specifier = ">=0.34" },
     { name = "augmax", marker = "extra == 'policy-openpi'", specifier = ">=0.3.4" },
-    { name = "av", marker = "extra == 'policy-dp'", specifier = "==12.3.0" },
     { name = "beartype", marker = "extra == 'policy-openpi'", specifier = "==0.19.0" },
     { name = "chex", marker = "extra == 'policy-openpi'", specifier = ">=0.1.89" },
     { name = "decord" },

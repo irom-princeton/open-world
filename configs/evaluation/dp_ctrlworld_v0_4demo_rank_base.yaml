@@ -1,0 +1,46 @@
+world_model:
+  name: ctrlworld
+  checkpoint_path: checkpoints/wm/ctrlworld/checkpoint-10000.pt
+  params:
+    svd_model_path: external/stable-video-diffusion-img2vid
+    clip_model_path: external/clip-vit-base-patch32
+    debug: false
+    debug_log_limit: 3
+    num_frames: 5
+    num_history: 6
+    action_dim: 7
+    action_downsample: 1
+    width: 320
+    height: 192
+    num_inference_steps: 50
+    decode_to_rgb: true
+
+policy:
+  name: dp
+  checkpoint_path: checkpoints/policy/dp/v0_4demo/checkpoint.pt
+  params:
+    repo_path: external/dppo
+    config_path: checkpoints/policy/dp/v0_4demo/config.yaml
+    normalization_path: checkpoints/policy/dp/v0_4demo/normalization.npz
+    ordered_obs_keys: ["joint_positions", "gripper_position"]
+    view_names: ["exterior_left", "wrist"]
+    stacked_view_order: [exterior_right, exterior_left, wrist]
+    camera_indices: [0, 1]
+    device: cuda
+    act_steps: 15
+    action_adapter_checkpoint_path: checkpoints/action_adapter/model2_15_9.pth
+    action_adapter_gripper_max: 1.0
+    policy_skip_step: 3
+    num_action_steps: 5
+
+reward_model:
+  name: dummy
+  params: {}
+
+scheduler:
+  chunk_size: 5
+
+duration: 20
+action_hz: 5
+video_dir: outputs/dp/base_wm/rank_carrot/v0_4demo
+dataset_path: data/benchmark/rank_carrot

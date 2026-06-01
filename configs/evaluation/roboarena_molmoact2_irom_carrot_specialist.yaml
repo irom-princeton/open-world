@@ -1,6 +1,6 @@
 world_model:
-  name: vidwm
-  checkpoint_path: checkpoints/wm/checkpoint-120000.pt
+  name: ctrlworld
+  checkpoint_path: checkpoints/wm/ctrlworld/v0-checkpoint-120000.pt
   params:
     svd_model_path: external/stable-video-diffusion-img2vid
     clip_model_path: external/clip-vit-base-patch32
@@ -12,17 +12,11 @@ world_model:
     action_downsample: 3
     width: 320
     height: 192
-    num_inference_steps: 4
+    num_inference_steps: 50
     decode_to_rgb: true
 
 policy:
   name: molmoact2
-  # In-process load (same shape as OpenPI's example config). `checkpoint_path`
-  # can be a HF repo id (snapshot_download is called) or a local snapshot dir.
-  #
-  # Alternative: leave `checkpoint_path` unset and set
-  # `policy.params.server_url: http://host:port` to talk to a running
-  # `external/molmoact2/examples/droid/host_server_droid.py` instead.
   checkpoint_path: allenai/MolmoAct2-DROID
   params:
     dtype: bfloat16
@@ -30,8 +24,6 @@ policy:
     norm_tag: franka_droid
     action_mode: continuous
     num_steps: 10
-    # DROID checkpoint takes a SINGLE exterior view + wrist. Pick which named
-    # view in your dataset to send as external_cam.
     exterior_view_name: exterior_left
     wrist_view_name: wrist
     stacked_view_order: [exterior_left, exterior_right, wrist]
@@ -43,16 +35,13 @@ policy:
     debug_log_limit: 3
 
 reward_model:
-  name: robometer
-  params:
-    model_path: robometer/Robometer-4B
-    fps: 2.0
-    success_threshold: 0.8
+  name: dummy
+  params: {}
 
 scheduler:
-  chunk_size: 10
+  chunk_size: 15
 
-duration: 10
+duration: 20
 action_hz: 15
-video_dir: outputs/irom_test_carrot_molmoact2_videos
-dataset_path: data/benchmark/irom_test_carrot
+video_dir: outputs/roboarena/specialist_wm/irom_carrot/molmoact2_droid
+dataset_path: data/benchmark/irom_carrot_pnp
