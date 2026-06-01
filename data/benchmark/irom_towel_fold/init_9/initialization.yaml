@@ -1,0 +1,26 @@
+initial_state:
+  robot:
+    state_representation: cartesian_position_with_gripper
+    state:
+    - 0.347476065158844
+    - -0.02018182910978794
+    - 0.48863545060157776
+    - -3.104150349091152
+    - 0.016909268413913825
+    - 0.0053369606713215625
+    - 0.0
+    joint_position:
+    - -0.0026080470997840166
+    - -0.6624130606651306
+    - -0.0529625304043293
+    - -2.5350725650787354
+    - 0.004164350684732199
+    - 1.8546000719070435
+    - -0.05030307546257973
+    gripper_position: 0.0
+instruction: fold the towel
+metadata:
+  suite: irom_towel_fold
+  scene: irom
+  task_type: fold
+  state_length: 7

@@ -1,0 +1,26 @@
+initial_state:
+  robot:
+    state_representation: cartesian_position_with_gripper
+    state:
+    - 0.3683585524559021
+    - 0.035788796842098236
+    - 0.48747995495796204
+    - -3.1369070669560433
+    - 0.019337409099871916
+    - 0.0260396195357613
+    - 0.0
+    joint_position:
+    - 0.039372868835926056
+    - -0.5864559412002563
+    - 0.04759775474667549
+    - -2.484919786453247
+    - 0.03362525627017021
+    - 1.8797506093978882
+    - 0.042248040437698364
+    gripper_position: 0.0
+instruction: put the carrot in the bowl
+metadata:
+  suite: irom_carrot_pnp
+  scene: irom
+  task_type: pick_and_place
+  state_length: 7
