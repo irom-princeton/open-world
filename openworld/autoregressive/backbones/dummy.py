@@ -16,10 +16,10 @@ import math
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from .base import DiTBackbone
-from ..causal.attention import block_causal_attention, full_attention
+from ..causal.attention import causal_sdpa, full_attention
+from ..causal.context import CausalContext
 from ..causal.kv_cache import KVCache
 from ..causal.mask import block_ids_for_video, dense_block_causal_mask
 
@@ -59,15 +59,12 @@ class _Layer(nn.Module):
         B, H, S, hd = x.shape
         return x.transpose(1, 2).reshape(B, S, H * hd)
 
-    def forward(self, x, temb, cond, *, layer_idx, dense_mask=None, kv_cache=None, commit=True):
+    def forward(self, x, temb, cond, *, layer_idx, ctx: CausalContext):
         shift, scale = self.ada(temb).chunk(2, dim=-1)        # [B, D] each
         h = self.norm1(x) * (1 + scale[:, None]) + shift[:, None]
         q, k, v = self._heads(self.q(h)), self._heads(self.k(h)), self._heads(self.v(h))
-        if kv_cache is not None:
-            k, v = kv_cache.extend_self(layer_idx, k, v, commit=commit)
-            attn = full_attention(q, k, v)
-        else:
-            attn = block_causal_attention(q, k, v, dense_mask=dense_mask)
+        # same dispatch as the real Wan/Cosmos processors
+        attn = causal_sdpa(ctx, q, k, v, layer_idx)
         x = x + self.o(self._merge(attn))
         # cross-attention to the (constant) condition
         hc = self.norm2(x)
@@ -141,9 +138,9 @@ class DummyDiT(DiTBackbone):
         tok = tok + self._pos(Fr, tpf, 0, latents.device)[None]
         temb = self._t_emb(timestep, B, latents.device)
         bids = block_ids_for_video(Fr, tpf, frames_per_block, device=latents.device)
-        mask = dense_block_causal_mask(bids, bids, window=window)
+        ctx = CausalContext(mode="train", dense_mask=dense_block_causal_mask(bids, bids, window=window))
         for i, blk in enumerate(self.blocks):
-            tok = blk(tok, temb, cond, layer_idx=i, dense_mask=mask)
+            tok = blk(tok, temb, cond, layer_idx=i, ctx=ctx)
         return self._unpatchify(tok, shp, C)
 
     def forward_cached(self, latent_block, timestep, cond, *, kv_cache: KVCache, start_frame, commit=True):
@@ -152,6 +149,7 @@ class DummyDiT(DiTBackbone):
         tpf = shp[1] * shp[2]
         tok = tok + self._pos(Fr, tpf, start_frame, latent_block.device)[None]
         temb = self._t_emb(timestep, B, latent_block.device)
+        ctx = CausalContext(mode="cache", kv_cache=kv_cache, commit=commit)
         for i, blk in enumerate(self.blocks):
-            tok = blk(tok, temb, cond, layer_idx=i, kv_cache=kv_cache, commit=commit)
+            tok = blk(tok, temb, cond, layer_idx=i, ctx=ctx)
         return self._unpatchify(tok, shp, C)

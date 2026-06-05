@@ -1,13 +1,17 @@
-"""Scaled-dot-product attention helpers for block-causal training and cached
-autoregressive inference.
+"""The single block-causal attention dispatch.
 
-Key invariant that makes the KV-cache exact: during a rollout, the cache only
-ever holds keys/values from the current block and earlier ones. So the new
-block's queries can attend to the *entire* cache with **no mask** and get
-exactly the same result as a full masked forward restricted to those blocks.
-Training therefore uses a dense block-causal mask; cached inference uses plain
-full attention against the cache. ``tests/test_causal_rollout.py`` asserts the
-two agree to numerical tolerance.
+Every self-attention site — the DummyDiT and the patched Wan/Cosmos processors —
+routes through :func:`causal_sdpa`, so there is exactly one place that decides
+how a query block attends given the :class:`CausalContext` mode:
+
+* ``"train"`` — full clip with the precomputed dense block-causal mask (exact).
+* ``"cache"`` — append this layer's K/V to the cache (or, mid-denoise, attend the
+  committed cache + the transient current block) and attend with no mask; the
+  cache is already causal.
+* ``"off"`` — plain full attention (the bidirectional teacher path).
+
+Backbone-specific q/k/v/RoPE prep stays in each backbone's processor; only this
+shared tail is common.
 """
 
 from __future__ import annotations
@@ -15,37 +19,33 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from .mask import dense_block_causal_mask
+from .context import CausalContext
 
 
 def full_attention(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, *, dropout_p: float = 0.0
 ) -> torch.Tensor:
-    """Unmasked SDPA. Used on the cached path (cache is already causal)."""
+    """Unmasked SDPA (cross-attention, and the cached-path tail)."""
     return F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
 
 
-def block_causal_attention(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    *,
-    block_ids_q: torch.Tensor | None = None,
-    block_ids_kv: torch.Tensor | None = None,
-    window: int | None = None,
-    dense_mask: torch.Tensor | None = None,
-    dropout_p: float = 0.0,
+def causal_sdpa(
+    ctx: CausalContext,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    layer_idx: int,
 ) -> torch.Tensor:
-    """Block-causal SDPA over ``[B, heads, S, head_dim]`` tensors.
+    """Apply the block-causal attention for one self-attention layer.
 
-    Pass either a precomputed boolean ``dense_mask`` ``[Sq, Skv]`` (reused
-    across layers — cheaper) or the per-token ``block_ids`` to build one.
+    Tensors are ``[B, heads, S, head_dim]``. ``layer_idx`` selects this layer's
+    KV-cache slot in ``"cache"`` mode.
     """
-    if dense_mask is None:
-        if block_ids_q is None or block_ids_kv is None:
-            raise ValueError("provide dense_mask or both block_ids_q/block_ids_kv")
-        dense_mask = dense_block_causal_mask(block_ids_q, block_ids_kv, window=window)
-    # SDPA expects an additive or boolean mask broadcastable to [B, H, Sq, Skv].
-    return F.scaled_dot_product_attention(
-        q, k, v, attn_mask=dense_mask.to(q.device), dropout_p=dropout_p
-    )
+    if ctx.mode == "cache":
+        key, value = ctx.kv_cache.extend_self(layer_idx, key, value, commit=ctx.commit)
+        return F.scaled_dot_product_attention(query, key, value, attn_mask=None)
+    if ctx.mode == "train":
+        mask = ctx.dense_mask.to(query.device) if ctx.dense_mask is not None else None
+        return F.scaled_dot_product_attention(query, key, value, attn_mask=mask)
+    # "off" -> bidirectional full attention
+    return F.scaled_dot_product_attention(query, key, value, attn_mask=None)

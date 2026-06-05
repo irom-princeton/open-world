@@ -19,7 +19,8 @@ from __future__ import annotations
 import torch
 
 from .base import DiTBackbone
-from ..causal.convert import CausalContext, attach_block_causal_cosmos
+from ._attn import attach_block_causal_cosmos
+from ..causal.context import CausalContext
 from ..causal.kv_cache import KVCache
 from ..causal.mask import block_ids_for_video, dense_block_causal_mask
 
@@ -33,7 +34,7 @@ class CosmosBackbone(DiTBackbone):
         self.patch_spatial = transformer.config.patch_size[1]
         self.patch_temporal = transformer.config.patch_size[0]
         self.context = attach_block_causal_cosmos(transformer, CausalContext())
-        self.num_self_layers = self.context._num_self_layers
+        self.num_self_layers = self.context.num_self_layers
 
     @classmethod
     def from_pretrained(cls, repo_or_path: str, *, cross_attn_dim: int, torch_dtype=torch.bfloat16):
@@ -86,7 +87,6 @@ class CosmosBackbone(DiTBackbone):
         ctx = self.context
         ctx.mode = "train"
         ctx.dense_mask = dense_block_causal_mask(bids, bids, window=window)
-        ctx.begin()
         x = self._call(self._to_cfhw(latents), timestep, cond)
         ctx.mode = "off"
         return self._to_fchw(x)

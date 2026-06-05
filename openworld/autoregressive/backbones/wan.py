@@ -4,7 +4,7 @@ Wan is a DiT with unified 3D self-attention (``attn1``) + text cross-attention
 (``attn2``) and complex RoPE — the substrate the Self-Forcing / CausVid recipe
 was built on, which is why it is the recommended base over the SVD UNet. We load
 the public Wan2.1-T2V-1.3B transformer, swap its self-attention for the
-block-causal + KV-cached processor (``causal/convert.py``), and expose the two
+block-causal + KV-cached processor (``backbones/_attn.py``), and expose the two
 forward modes of :class:`DiTBackbone`.
 
 * ``forward_train`` runs the full clip; RoPE is computed over the whole sequence
@@ -22,7 +22,8 @@ from __future__ import annotations
 import torch
 
 from .base import DiTBackbone
-from ..causal.convert import CausalContext, attach_block_causal
+from ._attn import attach_block_causal
+from ..causal.context import CausalContext
 from ..causal.kv_cache import KVCache
 from ..causal.mask import block_ids_for_video, dense_block_causal_mask
 
@@ -51,7 +52,7 @@ class WanBackbone(DiTBackbone):
         self.patch_spatial = transformer.config.patch_size[1]
         self.patch_temporal = transformer.config.patch_size[0]
         self.context = attach_block_causal(transformer, CausalContext())
-        self.num_self_layers = self.context._num_self_layers
+        self.num_self_layers = self.context.num_self_layers
 
     # -- constructors ----------------------------------------------------
     @classmethod
@@ -105,7 +106,6 @@ class WanBackbone(DiTBackbone):
         ctx = self.context
         ctx.mode = "train"
         ctx.dense_mask = dense_block_causal_mask(bids, bids, window=window)
-        ctx.begin()
         x = self._call(self._to_cfhw(latents), timestep, cond)
         ctx.mode = "off"
         return self._to_fchw(x)
@@ -116,7 +116,6 @@ class WanBackbone(DiTBackbone):
         ctx.mode = "cache"
         ctx.kv_cache = kv_cache
         ctx.commit = commit
-        ctx.begin()
         # offset RoPE to absolute frame positions for this block.
         rope = self.transformer.rope
         orig_forward = rope.forward

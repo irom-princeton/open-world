@@ -34,8 +34,9 @@ cross-attention, first/history frames as clean latents in the cache.
 ```
 openworld/autoregressive/
   config.py            ARWMArgs + BACKBONE_PRESETS
-  causal/              mask.py · kv_cache.py · attention.py · convert.py   <- novel core
-  backbones/           base.py (ABC) · wan.py · cosmos_predict2.py · svd.py · dummy.py
+  causal/              mask.py · kv_cache.py · context.py · attention.py   <- novel core (backbone-agnostic)
+  backbones/           base.py (ABC) · _attn.py (Wan/Cosmos block-causal procs)
+                       wan.py · cosmos_predict2.py · svd.py · dummy.py
   conditioning/        action.py (reuses vidwm encoder) · multiview.py
   distill/             scheduler.py · dmd.py · self_forcing.py
   model.py             ARWorldModel (= self-forcing generator) + build_training_stack
