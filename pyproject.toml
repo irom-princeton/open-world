@@ -122,7 +122,10 @@ autoregressive = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["openworld*"]
+# vidwm* is included so the action encoder it provides imports when the package
+# is installed (not only when cwd happens to be the repo root); the AR
+# conditioner depends on it.
+include = ["openworld*", "vidwm*"]
 
 [tool.uv]
 conflicts = [
