@@ -31,6 +31,13 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p slurm_outputs
 
+# Compute nodes here have no internet: force HF to use the (scratch) cache that
+# was populated from the login node. Pre-download weights with
+# scripts/download_ar_weights.sh before submitting.
+export HF_HOME="${HF_HOME:-/scratch/gpfs/AM43/yy4041/.cache/huggingface}"
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
 echo "host=$(hostname)  job=${SLURM_JOB_ID:-NA}  gpu=${CUDA_VISIBLE_DEVICES:-NA}"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 

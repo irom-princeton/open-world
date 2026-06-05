@@ -91,9 +91,30 @@ uv sync --extra autoregressive                       # env (this branch)
 python -m openworld.autoregressive.train_self_forcing --smoke   # weightless sanity
 .venv/bin/python -m pytest openworld/autoregressive/tests -q    # unit tests
 
-accelerate launch -m openworld.autoregressive.train_self_forcing \
+# GPU (this cluster is offline on compute nodes — use sbatch, not the login node):
+bash scripts/download_ar_weights.sh                  # login node: Wan transformer + VAE -> external/
+sbatch scripts/ar_gpu.slurm .venv/bin/python scripts/smoke_wan_real.py   # real-weights GPU smoke
+sbatch scripts/ar_gpu.slurm accelerate launch -m openworld.autoregressive.train_self_forcing \
     --config configs/training/ar_wan_1_3b.py         # real distillation
 ```
+
+**Offline-cluster loading gotcha:** the compute nodes have no internet, and
+diffusers' sharded-checkpoint loader pings the Hub for a bare repo id *even with*
+`HF_HUB_OFFLINE=1`. So weights must be loaded from a **local directory**
+(`backbone_ckpt="external/Wan2.1-T2V-1.3B-Diffusers"`, set in the Wan config).
+`scripts/ar_gpu.slurm` exports `HF_HUB_OFFLINE=1`/`HF_HOME` for you.
+
+## Validated on H200 (real weights)
+
+`scripts/smoke_wan_real.py` on one H200, loading the actual Wan2.1-1.3B
+(1.42B params, 30 self-attn layers):
+
+* fp32 `forward_train` vs KV-cached rollout: **max err 4.8e-06** — the
+  block-causal cache is exact at real scale, not just on the DummyDiT.
+* Wan VAE (`AutoencoderKLWan`) loads, **16 latent channels** (the re-encode target).
+* **~34 ms / block** (2 latent frames, single forward, bf16, 320² 1 view) → a
+  2-step distilled rollout ≈ ~85 ms/block ≈ **~90 fps effective single-view** —
+  the OmniDreams/FlashDreams real-time regime.
 
 ## What still needs real weights / a GPU (honest status)
 
