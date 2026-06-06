@@ -16,6 +16,8 @@ autoregressive rollout reproduces the masked forward exactly. See
 
 from __future__ import annotations
 
+import contextlib
+
 import torch
 
 from .base import DiTBackbone
@@ -113,16 +115,20 @@ class CosmosBackbone(DiTBackbone):
         B, C, F, H, W = x_cfhw.shape
         # Cosmos is built with concat_padding_mask=True and expects a [B,1,H,W]
         # padding mask (all-zero = no padding for our square robot latents).
-        # Match the transformer's weight dtype (bf16 weights vs fp32 rollout
-        # noise / conditioner) so the backbone is the single dtype boundary.
+        # Coerce inputs to the param dtype, then run the transformer under
+        # autocast when autocast_dtype is set (fp32 master weights + bf16 compute).
         dt = next(self.transformer.parameters()).dtype
         x_cfhw = x_cfhw.to(dt)
+        cond = cond.to(dt) if cond is not None else cond
         padding_mask = torch.zeros(B, 1, H, W, device=x_cfhw.device, dtype=dt)
-        out = self.transformer(
-            hidden_states=x_cfhw, timestep=timestep,
-            encoder_hidden_states=(cond.to(dt) if cond is not None else cond),
-            padding_mask=padding_mask, return_dict=False,
-        )
+        ac = self.autocast_dtype
+        ctx = (torch.autocast("cuda", dtype=ac)
+               if ac is not None and x_cfhw.is_cuda else contextlib.nullcontext())
+        with ctx:
+            out = self.transformer(
+                hidden_states=x_cfhw, timestep=timestep,
+                encoder_hidden_states=cond, padding_mask=padding_mask, return_dict=False,
+            )
         return out[0] if isinstance(out, (tuple, list)) else out
 
     def forward_train(self, latents, timestep, cond, *, frames_per_block, window=None):

@@ -38,7 +38,8 @@ def main() -> int:
         denoising_step_list=(1000, 500), warp_denoising_step=True,
         critic_steps_per_gen_step=1, real_guidance_scale=3.5,
         learning_rate=6e-6, critic_learning_rate=6e-6,
-        latent_root=latent_root, dtype=torch.bfloat16,
+        # match the launch config: fp32 master weights + bf16 autocast compute.
+        latent_root=latent_root, dtype=torch.float32, mixed_precision="bf16",
     )
     ds = ARLatentDataset(cfg, "train")
     loader = DataLoader(ds, batch_size=1, shuffle=True, drop_last=True)

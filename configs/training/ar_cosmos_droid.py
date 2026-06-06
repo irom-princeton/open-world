@@ -24,6 +24,8 @@ Recipe matches the OmniDreams Cosmos2 self-forcing defaults
 
 from __future__ import annotations
 
+import torch
+
 from openworld.autoregressive.config import ARWMArgs
 
 
@@ -53,6 +55,8 @@ def get_args() -> ARWMArgs:
         teacher_ckpt=None,
         learning_rate=6e-6,
         critic_learning_rate=6e-6,
+        # fp32 master weights + bf16 autocast compute (see docs/AUTOREGRESSIVE.md "Dtype").
+        dtype=torch.float32,
         mixed_precision="bf16",
         train_batch_size=1,
         max_train_steps=200_000,

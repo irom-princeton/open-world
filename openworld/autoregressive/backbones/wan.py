@@ -19,6 +19,8 @@ builds a small config so the wiring is unit-testable on CPU.
 
 from __future__ import annotations
 
+import contextlib
+
 import torch
 
 from .base import DiTBackbone
@@ -92,15 +94,20 @@ class WanBackbone(DiTBackbone):
         return latents.permute(0, 2, 1, 3, 4).contiguous()
 
     def _call(self, x_cfhw, timestep, cond):
-        # Match the transformer's weight dtype (we load bf16 weights but the
-        # rollout noise / conditioner may be fp32) so there is no manual autocast
-        # to maintain — the backbone is the single dtype boundary.
+        # Coerce inputs to the param dtype (rollout noise / conditioner may arrive
+        # in another dtype); then, if autocast_dtype is set (fp32 master weights +
+        # bf16 compute), run the heavy transformer matmuls/convs under autocast.
         dt = self.transformer.patch_embedding.weight.dtype
-        out = self.transformer(
-            hidden_states=x_cfhw.to(dt), timestep=timestep,
-            encoder_hidden_states=(cond.to(dt) if cond is not None else cond),
-            return_dict=False,
-        )
+        x_cfhw = x_cfhw.to(dt)
+        cond = cond.to(dt) if cond is not None else cond
+        ac = self.autocast_dtype
+        ctx = (torch.autocast("cuda", dtype=ac)
+               if ac is not None and x_cfhw.is_cuda else contextlib.nullcontext())
+        with ctx:
+            out = self.transformer(
+                hidden_states=x_cfhw, timestep=timestep,
+                encoder_hidden_states=cond, return_dict=False,
+            )
         return out[0] if isinstance(out, (tuple, list)) else out
 
     # -- forward modes ---------------------------------------------------

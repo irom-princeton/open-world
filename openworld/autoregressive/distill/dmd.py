@@ -32,10 +32,13 @@ def make_cfg_score_fn(
     """Wrap a backbone's ``forward_train`` as a (CFG'd) velocity score function."""
 
     def score_fn(x_sigma, timestep, cond):
-        v_cond = backbone.forward_train(x_sigma, timestep, cond, frames_per_block=frames_per_block)
+        # Cast scores to fp32: under bf16 autocast the backbone returns bf16, but
+        # the DMD score difference (x0_fake - x0_real) and the CFG combination
+        # difference two large, similar tensors — keep that arithmetic in fp32.
+        v_cond = backbone.forward_train(x_sigma, timestep, cond, frames_per_block=frames_per_block).float()
         if scale == 1.0 or null_cond is None:
             return v_cond
-        v_uncond = backbone.forward_train(x_sigma, timestep, null_cond, frames_per_block=frames_per_block)
+        v_uncond = backbone.forward_train(x_sigma, timestep, null_cond, frames_per_block=frames_per_block).float()
         return v_uncond + scale * (v_cond - v_uncond)
 
     return score_fn

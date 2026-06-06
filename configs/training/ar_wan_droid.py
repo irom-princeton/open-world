@@ -14,6 +14,8 @@ Geometry note: DROID episodes are ~109 RGB frames -> ~28 latent frames (Wan VAE
 
 from __future__ import annotations
 
+import torch
+
 from openworld.autoregressive.config import ARWMArgs
 
 
@@ -43,6 +45,9 @@ def get_args() -> ARWMArgs:
         teacher_ckpt=None,
         learning_rate=6e-6,
         critic_learning_rate=6e-6,
+        # fp32 master weights + bf16 autocast compute (stable AdamW over 200k steps;
+        # see docs/AUTOREGRESSIVE.md "Dtype").
+        dtype=torch.float32,
         mixed_precision="bf16",
         train_batch_size=1,
         max_train_steps=200_000,

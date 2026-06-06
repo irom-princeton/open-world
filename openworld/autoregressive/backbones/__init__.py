@@ -17,6 +17,15 @@ def build_backbone(cfg) -> DiTBackbone:
     * otherwise -> ``from_pretrained(cfg.resolved_backbone_ckpt)``.
     """
     name = cfg.backbone
+    bb = _construct(cfg, name)
+    # fp32 master weights + bf16 autocast: the backbone forward runs under this
+    # compute dtype while params/grads/optimizer stay in cfg.dtype (None -> no
+    # autocast). Dummy/SVD ignore it (CPU / not block-causal).
+    bb.autocast_dtype = cfg.autocast_dtype
+    return bb
+
+
+def _construct(cfg, name: str) -> DiTBackbone:
     if name == "dummy":
         from .dummy import DummyDiT
         return DummyDiT(in_channels=cfg.in_channels, cross_attn_dim=cfg.cross_attn_dim)

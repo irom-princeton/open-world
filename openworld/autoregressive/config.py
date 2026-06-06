@@ -141,7 +141,19 @@ class ARWMArgs:
     # finetuned on robot data (the "student-init" / E1 stage).
     student_init_ckpt: str | None = None
 
+    # ``dtype`` is the *parameter/optimizer* dtype. For a real run keep it
+    # float32 (stable AdamW master weights) and let ``mixed_precision`` drive the
+    # bf16 autocast compute; for a quick smoke bf16 everywhere is fine.
     dtype: torch.dtype = torch.bfloat16
+
+    @property
+    def autocast_dtype(self) -> "torch.dtype | None":
+        """Compute dtype for the transformer forward, derived from
+        ``mixed_precision``. ``None`` when params already carry the compute dtype
+        (so we don't autocast bf16 weights to bf16, or fp32 to fp32)."""
+        want = {"bf16": torch.bfloat16, "fp16": torch.float16}.get(self.mixed_precision)
+        # only autocast when it would actually change precision vs the param dtype
+        return want if want is not None and want != self.dtype else None
 
     def __post_init__(self) -> None:
         self.output_dir = f"checkpoints/ar_wm/{self.tag}"

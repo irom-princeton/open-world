@@ -165,17 +165,33 @@ sbatch bash_scripts/ar_gpu.slurm .venv/bin/python scripts/replay_ar.py \
 
 ## Dtype
 
-Weights load in bf16 and the self-forcing loop does **not** autocast (the three
-models aren't `accelerator.prepare`'d), so the whole graph must run in one dtype:
+Two knobs: **`cfg.dtype`** is the parameter/optimizer dtype, **`cfg.mixed_precision`**
+the compute dtype. The real configs use **fp32 master weights + bf16 autocast**
+(`dtype=float32`, `mixed_precision="bf16"`) — the standard mixed-precision recipe
+and what the Self-Forcing/CausVid references use:
 
-* the backbone `_call` casts its inputs to the transformer's weight dtype (the
-  single dtype boundary — rollout noise / conditioner may arrive fp32);
+* **fp32 params + fp32 AdamW state.** At `lr=6e-6` on O(1) weights, a per-step
+  update ≈1e-6 is below bf16's ~3-digit precision and would be rounded away — the
+  optimizer stalls on the smallest-but-real updates over a 200k-step run. The
+  master copy must be fp32 (Adam's momentum buffers are fp32 regardless).
+* **bf16 compute.** The backbone `_call` coerces inputs to the param dtype, then
+  runs the transformer matmuls/convs under `torch.autocast("cuda", bf16)` when
+  `cfg.autocast_dtype` is set. `autocast_dtype` is `None` when params already
+  carry the compute dtype (pure-fp32 or pure-bf16), so the same path also serves
+  a quick `dtype=bf16` smoke.
+* **fp32 loss math.** `make_cfg_score_fn` casts the backbone's (bf16) score output
+  to fp32, so the precision-sensitive DMD difference `x0_fake - x0_real` and the
+  CFG combination — differencing two large, similar tensors — run in fp32.
+  `FlowMatchScheduler.add_noise` / `x0_from_velocity` cast `sigma` (built fp32) to
+  the latent dtype so the noising arithmetic stays in the latent's dtype
+  (regression-tested by `test_scheduler_preserves_dtype`).
 * `generate_rollout` draws block noise in the generator's parameter dtype;
-* `FlowMatchScheduler.add_noise` / `x0_from_velocity` cast `sigma` (built fp32) to
-  the latent dtype — otherwise the multiply promotes a bf16 latent back to fp32
-  and that fp32 leaks into the loss, breaking the bf16 backward (regression-tested
-  by `test_scheduler_preserves_dtype`);
-* `train_self_forcing.main` casts models + batch to `cfg.dtype`.
+  `train_self_forcing.main` casts models + batch to `cfg.dtype`. Backward and the
+  optimizer step run **outside** autocast (autocast wraps only the transformer
+  forward inside `_call`).
+
+To switch precision: `dtype=float32, mixed_precision="no"` → pure fp32;
+`dtype=bfloat16` → uniform bf16 (fast smoke, not for long runs).
 
 ## What still needs real weights / a GPU (honest status)
 

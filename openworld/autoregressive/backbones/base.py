@@ -33,6 +33,11 @@ class DiTBackbone(nn.Module, ABC):
     patch_spatial: int
     patch_temporal: int
 
+    # Compute dtype for the transformer forward when parameters are kept in a
+    # higher precision (fp32 master weights + bf16 autocast). ``None`` -> run in
+    # the parameter dtype (pure fp32 or pure bf16). Set by ``build_backbone``.
+    autocast_dtype: "torch.dtype | None" = None
+
     @abstractmethod
     def forward_train(
         self,

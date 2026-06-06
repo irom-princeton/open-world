@@ -209,3 +209,13 @@ def test_config_geometry():
                    multiview_layout="height_stack")
     assert cfg.in_channels == 16 and cfg.cross_attn_dim == 4096
     assert cfg.latent_h_per_cam == 40 and cfg.latent_h_total == 120 and cfg.latent_w == 40
+
+
+def test_autocast_dtype_derivation():
+    """autocast only kicks in when it would change precision vs the param dtype:
+    fp32 params + bf16 mixed_precision -> bf16 autocast; uniform dtypes -> None."""
+    from openworld.autoregressive.config import ARWMArgs
+    fp32_bf16 = ARWMArgs(backbone="dummy", dtype=torch.float32, mixed_precision="bf16")
+    assert fp32_bf16.autocast_dtype == torch.bfloat16          # fp32 master + bf16 compute
+    assert ARWMArgs(backbone="dummy", dtype=torch.bfloat16, mixed_precision="bf16").autocast_dtype is None
+    assert ARWMArgs(backbone="dummy", dtype=torch.float32, mixed_precision="no").autocast_dtype is None
