@@ -15,7 +15,7 @@ from openworld.autoregressive.config import ARWMArgs
 def get_args() -> ARWMArgs:
     return ARWMArgs(
         backbone="wan_1_3b",
-        # Local weights dir (populated by scripts/download_ar_weights.sh). Required
+        # Local weights dir (populated by bash_scripts/download_weights.sh). Required
         # on the offline compute nodes — diffusers' sharded loader pings the Hub
         # for a bare repo id even in offline mode; a local dir loads from cache.
         backbone_ckpt="external/Wan2.1-T2V-1.3B-Diffusers",

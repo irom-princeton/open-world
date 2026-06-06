@@ -85,15 +85,13 @@ class ARWMArgs:
     num_workers: int = 4
     seed: int = 0
 
-    # ---------------- dataset (shared w/ LiberoWMArgs) ----------------
-    dataset_root_path: str = "data/libero_processed"
-    dataset_names: str = "libero_spatial+libero_object+libero_goal+libero_10+libero_90"
-    dataset_meta_info_path: str = "dataset_meta_info"
-    dataset_cfgs: str = "libero_spatial+libero_object+libero_goal+libero_10+libero_90"
-    prob: tuple[float, ...] = (0.2, 0.2, 0.2, 0.2, 0.2)
-    annotation_name: str = "annotation"
-    down_sample: int = 1
-    skip_step: int = 1
+    # ---------------- data (precomputed latents) ----------------
+    # The framework ingests any raw format via a format adapter
+    # (openworld.autoregressive.data.formats) at preprocess time, then trains on
+    # a standard precomputed latent layout (scripts/preprocess_ar_latents.py).
+    data_format: str = "droid_ctrl_world"    # format adapter for the raw dataset
+    data_root: str | None = None             # raw dataset root (preprocess input)
+    latent_root: str = "data/droid_ar_latents"  # precomputed latent layout (training input)
 
     # ---------------- logging ------------------------
     tag: str = "ar_wan_selfforcing"

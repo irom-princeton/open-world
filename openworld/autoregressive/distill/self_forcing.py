@@ -62,7 +62,8 @@ def generate_rollout(
     if kv_cache is None:
         kv_cache = generator.make_kv_cache()
     B = latent_block_shape[0]
-    dev = next(generator.parameters()).device
+    gp = next(generator.parameters())
+    dev, pdt = gp.device, gp.dtype
     start = 0
     if history_blocks:
         start = _prime_history(generator, history_blocks, cond, scheduler, kv_cache, frames_per_block)
@@ -71,7 +72,7 @@ def generate_rollout(
     n_steps = scheduler.num_steps
     blocks: list[torch.Tensor] = []
     for b in range(num_blocks):
-        x = torch.randn(latent_block_shape, device=dev)
+        x = torch.randn(latent_block_shape, device=dev, dtype=pdt)
         cb = _cond_for(cond, b)
         for i in range(n_steps):
             sigma_i = sigmas[i].to(dev).expand(B)

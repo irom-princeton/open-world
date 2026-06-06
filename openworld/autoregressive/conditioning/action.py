@@ -47,6 +47,12 @@ class ActionConditioner(nn.Module):
         frame_level_cond: bool = True,
         cfg_drop: bool | None = None,   # override dropout (False at eval)
     ) -> torch.Tensor:                  # [B, L, cross_attn_dim]
+        # Text needs a tokenizer + text encoder; until that pathway is wired the
+        # condition is action-only (the cross-attention already attends to the
+        # per-frame action tokens). Drop texts rather than crash on a missing
+        # tokenizer so the real training loop (which forwards `texts`) is safe.
+        if text_encoder is None or tokenizer is None:
+            texts = None
         out = self.encoder(
             actions, texts=texts, text_tokenizer=tokenizer, text_encoder=text_encoder,
             frame_level_cond=frame_level_cond, device=actions.device,

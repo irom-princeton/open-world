@@ -92,8 +92,13 @@ class WanBackbone(DiTBackbone):
         return latents.permute(0, 2, 1, 3, 4).contiguous()
 
     def _call(self, x_cfhw, timestep, cond):
+        # Match the transformer's weight dtype (we load bf16 weights but the
+        # rollout noise / conditioner may be fp32) so there is no manual autocast
+        # to maintain — the backbone is the single dtype boundary.
+        dt = self.transformer.patch_embedding.weight.dtype
         out = self.transformer(
-            hidden_states=x_cfhw, timestep=timestep, encoder_hidden_states=cond,
+            hidden_states=x_cfhw.to(dt), timestep=timestep,
+            encoder_hidden_states=(cond.to(dt) if cond is not None else cond),
             return_dict=False,
         )
         return out[0] if isinstance(out, (tuple, list)) else out

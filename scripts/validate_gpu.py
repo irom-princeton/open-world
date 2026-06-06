@@ -1,6 +1,6 @@
 """Weightless GPU validation for the autoregressive world model.
 
-Runs on a compute node (sbatch scripts/ar_gpu.slurm .venv/bin/python scripts/validate_gpu.py).
+Runs on a compute node (sbatch bash_scripts/ar_gpu.slurm .venv/bin/python scripts/validate_gpu.py).
 Confirms the device/dtype paths the CPU unit tests don't exercise:
 
   1. DummyDiT KV-cache == masked forward, on CUDA (fp32, exact).

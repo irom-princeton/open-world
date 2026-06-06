@@ -87,6 +87,122 @@ def test_self_forcing_smoke_updates_generator():
     assert all(math.isfinite(v) for v in logs.values())
 
 
+def _cosmos(cross=32):
+    """Tiny real Cosmos DiT (random init, 2 layers) — CPU/CI friendly."""
+    from openworld.autoregressive.backbones.cosmos_predict2 import CosmosBackbone
+    return CosmosBackbone.random_init(cross_attn_dim=cross, small=True).eval()
+
+
+def test_cosmos_kv_cache_matches_masked_forward():
+    """The Cosmos RoPE-offset cached rollout reproduces the masked forward exactly
+    (the OmniDreams `start_frame_for_rope` slice, ported to diffusers' Cosmos)."""
+    torch.manual_seed(0)
+    C, H, W, fpb, nblocks = 16, 8, 8, 2, 4
+    dit = _cosmos()
+    x = torch.randn(1, fpb * nblocks, C, H, W)
+    cond = torch.randn(1, 5, 32)
+    t = torch.zeros(1)
+    with torch.no_grad():
+        full = dit.forward_train(x, t, cond, frames_per_block=fpb)
+        cache = dit.make_kv_cache()
+        rolled = torch.cat([
+            dit.forward_cached(x[:, b*fpb:(b+1)*fpb], t, cond, kv_cache=cache, start_frame=b*fpb)
+            for b in range(nblocks)
+        ], dim=1)
+    assert (full - rolled).abs().max().item() < 1e-4
+
+
+def test_cosmos_sliding_window_rollout():
+    torch.manual_seed(1)
+    C, H, W, fpb, nblocks, win = 16, 8, 8, 2, 5, 2
+    dit = _cosmos()
+    x = torch.randn(1, fpb * nblocks, C, H, W)
+    cond = torch.randn(1, 4, 32)
+    t = torch.zeros(1)
+    with torch.no_grad():
+        full = dit.forward_train(x, t, cond, frames_per_block=fpb, window=win)
+        cache = dit.make_kv_cache(max_blocks=win)
+        rolled = torch.cat([
+            dit.forward_cached(x[:, b*fpb:(b+1)*fpb], t, cond, kv_cache=cache, start_frame=b*fpb)
+            for b in range(nblocks)
+        ], dim=1)
+    assert (full - rolled).abs().max().item() < 1e-4
+
+
+def test_cosmos_self_forcing_smoke_updates_generator():
+    """The full few-step self-forcing / DMD train step runs with the Cosmos
+    backbone (previously blocked: cached rollout raised NotImplementedError)."""
+    from openworld.autoregressive.train_self_forcing import run_smoke
+    logs = run_smoke(steps=1, backbone="cosmos_predict2_2b")
+    assert set(logs) == {"gen_loss", "critic_loss"}
+    assert all(math.isfinite(v) for v in logs.values())
+
+
+def _write_synthetic_latents(root, split, n_eps, *, V=3, C=16, Lf=10, h=3, w=4):
+    import json, os
+    os.makedirs(os.path.join(root, split), exist_ok=True)
+    samples = []
+    for e in range(n_eps):
+        torch.save(
+            {"latent": torch.randn(V, C, Lf, h, w).half(),
+             "action": torch.randn(Lf, 7), "text": f"task {e}", "num_latent_frames": Lf},
+            os.path.join(root, split, f"ep{e}.pt"),
+        )
+        samples.append({"ep_id": f"ep{e}", "num_latent_frames": Lf})
+    json.dump(samples, open(os.path.join(root, f"{split}_sample.json"), "w"))
+    json.dump({"state_01": [-1.0] * 7, "state_99": [1.0] * 7},
+              open(os.path.join(root, "stats.json"), "w"))
+
+
+def test_ar_latent_dataset_roundtrip(tmp_path):
+    from openworld.autoregressive.config import ARWMArgs
+    from openworld.autoregressive.data.dataset import ARLatentDataset
+    V, C, h, w = 3, 16, 3, 4
+    _write_synthetic_latents(str(tmp_path), "train", n_eps=4, V=V, C=C, Lf=10, h=h, w=w)
+    cfg = ARWMArgs(backbone="dummy", num_cams=V, frames_per_block=2,
+                   num_history_blocks=1, rollout_blocks=2, latent_root=str(tmp_path))
+    ds = ARLatentDataset(cfg, "train")
+    clip = (cfg.num_history_blocks + cfg.rollout_blocks) * cfg.frames_per_block  # 6
+    assert len(ds) == 4
+    s = ds[0]
+    # height-stacked latent: [L, C, V*h, w]
+    assert tuple(s["latent"].shape) == (clip, C, V * h, w)
+    assert tuple(s["action"].shape) == (clip, 7)
+    assert s["action"].abs().max() <= 1.0 + 1e-6   # normalized to [-1, 1]
+    assert isinstance(s["text"], str)
+
+
+def test_droid_format_adapter():
+    """The droid_ctrl_world adapter reads the real annotation layout if present."""
+    import os
+    from openworld.autoregressive.data.formats import build_format
+    root = "/scratch/gpfs/AM43/yy4041/data/droid_ctrl_world"
+    if not os.path.isdir(os.path.join(root, "annotation", "train")):
+        import pytest
+        pytest.skip("droid_ctrl_world dataset not present")
+    fmt = build_format("droid_ctrl_world", root, num_views=3)
+    eps = fmt.list_episodes("train")
+    assert len(eps) > 0
+    ep = fmt.load_episode(eps[0], "train")
+    assert ep.actions.shape[1] == 7 and len(ep.video_paths) == 3
+    assert ep.actions.shape[0] == ep.num_frames
+
+
+def test_scheduler_preserves_dtype():
+    """add_noise / x0_from_velocity must keep the latent's dtype: sigma is built
+    in fp32, and if it promotes a bf16 latent back to fp32 that fp32 leaks into
+    the loss graph and breaks the bf16 backward (regression guard)."""
+    from openworld.autoregressive.distill.scheduler import FlowMatchScheduler
+    sched = FlowMatchScheduler((1000, 500), num_train_timestep=1000)
+    x0 = torch.randn(2, 2, 16, 4, 4, dtype=torch.bfloat16)
+    eps = torch.randn_like(x0)
+    sigma = sched.random_sigma(2, x0.device, lo=0.02, hi=0.98)   # fp32
+    x_sigma = sched.add_noise(x0, eps, sigma)
+    assert x_sigma.dtype == torch.bfloat16
+    v = torch.randn_like(x0)
+    assert sched.x0_from_velocity(x_sigma, v, sigma).dtype == torch.bfloat16
+
+
 def test_config_geometry():
     from openworld.autoregressive.config import ARWMArgs
     cfg = ARWMArgs(backbone="wan_1_3b", num_cams=3, height=320, width=320,

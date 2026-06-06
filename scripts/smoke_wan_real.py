@@ -7,7 +7,7 @@ Loads the actual pretrained Wan transformer (+ VAE) and checks, at real scale:
   4. a rough per-block forward latency on this GPU (a real throughput datapoint).
 
 Run on a compute node:
-  sbatch scripts/ar_gpu.slurm .venv/bin/python scripts/smoke_wan_real.py
+  sbatch bash_scripts/ar_gpu.slurm .venv/bin/python scripts/smoke_wan_real.py
 """
 
 import os
@@ -15,7 +15,7 @@ import time
 
 import torch
 
-# Local dir (populated by scripts/download_ar_weights.sh) — required on the
+# Local dir (populated by bash_scripts/download_weights.sh) — required on the
 # offline compute nodes; diffusers' sharded loader pings the Hub for a repo id
 # even in offline mode, but reads a local dir's index directly.
 REPO = os.environ.get("AR_WAN_DIR", "external/Wan2.1-T2V-1.3B-Diffusers")

@@ -1,0 +1,125 @@
+"""Open-loop trajectory replay for the autoregressive world model.
+
+Given a ground-truth trajectory (preprocessed latents + recorded actions, e.g.
+from the ``val`` split), we:
+
+1. prime the KV-cache with the first ``history_blocks`` of *ground-truth* latents
+   (the "first frame(s)");
+2. feed the **full recorded action sequence** as conditioning (open-loop: actions
+   come from the dataset, not a live policy);
+3. let the student autoregressively generate every remaining latent block, each
+   block conditioning on its *own* predictions via the cache.
+
+The result is a predicted latent clip of the same length as the ground truth,
+which the caller decodes with the Wan VAE and compares side-by-side.
+
+This module is decode-free (latent-space only) so it can be unit-tested on CPU
+with the dummy backbone; pixel decoding + video IO live in ``scripts/replay_ar.py``.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+
+import numpy as np
+import torch
+
+
+# ---------------------------------------------------------------------------
+# Data loading (matches scripts/preprocess_ar_latents.py + ARLatentDataset)
+# ---------------------------------------------------------------------------
+def load_action_stats(latent_root: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load the train-set action percentiles used to normalize actions."""
+    with open(os.path.join(latent_root, "stats.json")) as f:
+        stat = json.load(f)
+    return (np.asarray(stat["state_01"], dtype=np.float32),
+            np.asarray(stat["state_99"], dtype=np.float32))
+
+
+def normalize_actions(action: np.ndarray, p01: np.ndarray, p99: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    """Normalize raw actions to [-1, 1] exactly as ``ARLatentDataset`` does."""
+    return np.clip(2 * (action - p01) / (p99 - p01 + eps) - 1, -1, 1).astype(np.float32)
+
+
+def load_full_episode(
+    latent_root: str, split: str, ep_id: str, num_cams: int,
+) -> tuple[torch.Tensor, np.ndarray, str]:
+    """Load one preprocessed episode as the full (un-windowed) clip.
+
+    Returns ``(latent [L, C, V*h, w] fp32, action [L, action_dim] raw, text)`` —
+    cameras height-stacked, matching ``ARLatentDataset.__getitem__`` but over the
+    whole episode rather than a random window.
+    """
+    rec = torch.load(os.path.join(latent_root, split, f"{ep_id}.pt"), weights_only=False)
+    latent = rec["latent"].float()                 # [V, C, Lf, h, w]
+    action = rec["action"].numpy()                 # [Lf, action_dim]
+    V, C, Lf, h, w = latent.shape
+    V = min(V, num_cams)
+    lat = latent[:V]                               # [V, C, Lf, h, w]
+    # height-stack cameras: [V, C, Lf, h, w] -> [Lf, C, V*h, w]
+    lat = lat.permute(2, 1, 0, 3, 4).reshape(Lf, C, V * h, w).contiguous()
+    return lat.float(), action, rec.get("text", "")
+
+
+# ---------------------------------------------------------------------------
+# Replay (latent space)
+# ---------------------------------------------------------------------------
+@torch.no_grad()
+def replay_episode_latents(
+    model,
+    latent_gt: torch.Tensor,        # [L, C, V*h, w] fp32, latent-frame rate
+    action_norm: np.ndarray,        # [L, action_dim] normalized, 1:1 with latent frames
+    *,
+    frames_per_block: int,
+    num_history_blocks: int,
+    in_channels: int,
+    device: torch.device,
+    dtype: torch.dtype | None = None,
+    max_blocks: int | None = None,
+    scheduler=None,
+) -> tuple[torch.Tensor, torch.Tensor, int]:
+    """Open-loop AR replay in latent space.
+
+    Returns ``(gt [N, C, V*h, w], pred [N, C, V*h, w], n_history_frames)`` where
+    ``N = n_history_frames + generated`` and ``pred`` is the history (ground truth)
+    concatenated with the generated blocks, aligned 1:1 with ``gt`` for comparison.
+    """
+    fpb = frames_per_block
+    L, C, Hs, W = latent_gt.shape
+    assert C == in_channels, f"latent channels {C} != backbone in_channels {in_channels}"
+
+    hist_frames = num_history_blocks * fpb
+    num_blocks = (L - hist_frames) // fpb
+    if max_blocks is not None:
+        num_blocks = min(num_blocks, max_blocks)
+    if num_blocks < 1:
+        raise RuntimeError(
+            f"episode too short: {L} latent frames, need > {hist_frames} "
+            f"(history {num_history_blocks} blocks x {fpb})"
+        )
+    N = hist_frames + num_blocks * fpb
+
+    pdt = dtype or next(model.parameters()).dtype
+    gt = latent_gt[:N].to(device)
+    hist = gt[:hist_frames].to(pdt)                                   # [hist_frames, C, Hs, W]
+    history_blocks = [hist[i:i + fpb].unsqueeze(0)                    # each [1, fpb, C, Hs, W]
+                      for i in range(0, hist_frames, fpb)]
+
+    actions = torch.from_numpy(action_norm[:N]).float().unsqueeze(0).to(device)   # [1, N, A]
+
+    ac = (torch.autocast(device.type, dtype=pdt)
+          if device.type == "cuda" else contextlib.nullcontext())
+    with ac:
+        cond = model.encode_cond(actions, cfg_drop=False)            # [1, N, cross]
+        latent_block_shape = (1, fpb, in_channels, Hs, W)
+        gen = model.rollout(
+            history_blocks, cond,
+            num_blocks=num_blocks, latent_block_shape=latent_block_shape,
+            scheduler=scheduler,
+        )                                                            # [1, num_blocks*fpb, C, Hs, W]
+
+    gen = gen[0].float().cpu()
+    pred = torch.cat([hist.float().cpu(), gen], dim=0)               # [N, C, Hs, W]
+    return gt.float().cpu(), pred, hist_frames

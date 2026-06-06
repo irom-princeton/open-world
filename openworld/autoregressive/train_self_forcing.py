@@ -55,10 +55,10 @@ def _latent_block_shape(cfg, batch: int) -> tuple:
 # ---------------------------------------------------------------------------
 # Smoke mode: synthetic, weightless, CPU-fast. Validates the full train loop.
 # ---------------------------------------------------------------------------
-def run_smoke(steps: int = 1) -> dict:
+def run_smoke(steps: int = 1, backbone: str = "dummy") -> dict:
     torch.set_num_threads(2)  # keep the weightless CPU smoke light for CI / shared nodes
     cfg = ARWMArgs(
-        backbone="dummy", random_init_backbone=True, multiview_layout="height_stack",
+        backbone=backbone, random_init_backbone=True, multiview_layout="height_stack",
         num_cams=1, frames_per_block=2, rollout_blocks=2, num_history_blocks=1,
         denoising_step_list=(1000, 500), critic_steps_per_gen_step=1,
         width=32, height=32, action_dim=7, dtype=torch.float32,
@@ -113,11 +113,14 @@ def main(args: ARWMArgs) -> None:
         critic_steps=args.critic_steps_per_gen_step, real_cfg=args.real_guidance_scale,
         dmd_lo=args.dmd_min_step_ratio, dmd_hi=args.dmd_max_step_ratio,
     )
-    gen, critic, teacher = (m.to(accelerator.device) for m in (gen, critic, teacher))
+    # Uniform dtype across weights + data: the backbones load bf16 weights and we
+    # do not autocast (the models aren't accelerator.prepare'd), so the whole
+    # self-forcing graph must be one dtype. Cast models + batch to args.dtype.
+    gen, critic, teacher = (m.to(accelerator.device, args.dtype) for m in (gen, critic, teacher))
 
     # --- data ---------------------------------------------------------------
-    from openworld.training.world_model.dataset import LiberoLatentDataset
-    train_dataset = LiberoLatentDataset(args, mode="train")
+    from openworld.autoregressive.data import ARLatentDataset
+    train_dataset = ARLatentDataset(args, split="train")
     loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.train_batch_size, shuffle=args.shuffle,
         num_workers=args.num_workers, pin_memory=True, drop_last=True,
@@ -133,8 +136,8 @@ def main(args: ARWMArgs) -> None:
                 f"{args.rollout_blocks} blocks x {args.frames_per_block} frames/block")
     while global_step < args.max_train_steps:
         for batch in loader:
-            latent = batch["latent"].to(accelerator.device)      # [B, F, C, H, W]
-            actions = batch["action"].to(accelerator.device)
+            latent = batch["latent"].to(accelerator.device, args.dtype)   # [B, F, C, H, W]
+            actions = batch["action"].to(accelerator.device, args.dtype)
             texts = batch.get("text")
             B = latent.shape[0]
             # clean history blocks prime the KV-cache.

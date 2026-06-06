@@ -6,12 +6,12 @@ is the closest analog to the driving model. Structurally it matches Wan (unified
 block-causal/KV-cache machinery via ``attach_block_causal_cosmos``.
 
 ``forward_train`` (full clip, block-causal mask) is exact and is what the
-self-forcing generator / DMD critic / teacher use. ``forward_cached`` needs the
-Cosmos RoPE sliced to absolute frame positions; that offset is not yet wired
-here (Cosmos's ``CosmosRotaryPosEmbed`` differs from Wan's and needs its own
-slice), so cached rollout currently raises with guidance — use the Wan backbone
-for validated cached rollout, or train Cosmos with ``forward_train`` and run the
-masked rollout. See ``docs/AUTOREGRESSIVE.md``.
+self-forcing generator / DMD critic / teacher use. ``forward_cached`` offsets
+the Cosmos RoPE to the block's absolute frame positions (mirroring the Wan
+backbone and OmniDreams' ``start_frame_for_rope`` slice) and lets the patched
+``BlockCausalCosmosAttnProcessor`` read/grow the KV-cache, so cached
+autoregressive rollout reproduces the masked forward exactly. See
+``docs/AUTOREGRESSIVE.md``.
 """
 
 from __future__ import annotations
@@ -23,6 +23,46 @@ from ._attn import attach_block_causal_cosmos
 from ..causal.context import CausalContext
 from ..causal.kv_cache import KVCache
 from ..causal.mask import block_ids_for_video, dense_block_causal_mask
+
+
+def _offset_rope_cosmos(rope, hidden_states: torch.Tensor, fps, frame_offset: int):
+    """Reproduce ``CosmosRotaryPosEmbed.forward`` but with the temporal positions
+    starting at absolute ``frame_offset`` instead of always at 0.
+
+    Spatial (h/w) frequencies are unchanged; only the per-frame temporal index is
+    shifted, so a block generated from a KV-cache lands at the same RoPE phase it
+    had inside the full masked forward (-> cached rollout == masked forward)."""
+    _, _, num_frames, height, width = hidden_states.shape
+    p_t, p_h, p_w = rope.patch_size
+    pe_size = [num_frames // p_t, height // p_h, width // p_w]
+    device = hidden_states.device
+
+    h_theta = 10000.0 * rope.h_ntk_factor
+    w_theta = 10000.0 * rope.w_ntk_factor
+    t_theta = 10000.0 * rope.t_ntk_factor
+
+    # seq must reach the block's absolute end; spatial only indexes [:pe_size].
+    seq_len = max(max(rope.max_size), frame_offset + pe_size[0])
+    seq = torch.arange(seq_len, device=device, dtype=torch.float32)
+    dim_h_range = torch.arange(0, rope.dim_h, 2, device=device, dtype=torch.float32)[: rope.dim_h // 2] / rope.dim_h
+    dim_w_range = torch.arange(0, rope.dim_w, 2, device=device, dtype=torch.float32)[: rope.dim_w // 2] / rope.dim_w
+    dim_t_range = torch.arange(0, rope.dim_t, 2, device=device, dtype=torch.float32)[: rope.dim_t // 2] / rope.dim_t
+    h_spatial_freqs = 1.0 / (h_theta**dim_h_range)
+    w_spatial_freqs = 1.0 / (w_theta**dim_w_range)
+    temporal_freqs = 1.0 / (t_theta**dim_t_range)
+
+    emb_h = torch.outer(seq[: pe_size[1]], h_spatial_freqs)[None, :, None, :].repeat(pe_size[0], 1, pe_size[2], 1)
+    emb_w = torch.outer(seq[: pe_size[2]], w_spatial_freqs)[None, None, :, :].repeat(pe_size[0], pe_size[1], 1, 1)
+
+    t_seq = seq[frame_offset : frame_offset + pe_size[0]]
+    if fps is None:
+        emb_t = torch.outer(t_seq, temporal_freqs)
+    else:
+        emb_t = torch.outer(t_seq / fps * rope.base_fps, temporal_freqs)
+    emb_t = emb_t[:, None, None, :].repeat(1, pe_size[1], pe_size[2], 1)
+
+    freqs = torch.cat([emb_t, emb_h, emb_w] * 2, dim=-1).flatten(0, 2).float()
+    return torch.cos(freqs), torch.sin(freqs)
 
 
 class CosmosBackbone(DiTBackbone):
@@ -73,9 +113,14 @@ class CosmosBackbone(DiTBackbone):
         B, C, F, H, W = x_cfhw.shape
         # Cosmos is built with concat_padding_mask=True and expects a [B,1,H,W]
         # padding mask (all-zero = no padding for our square robot latents).
-        padding_mask = torch.zeros(B, 1, H, W, device=x_cfhw.device, dtype=x_cfhw.dtype)
+        # Match the transformer's weight dtype (bf16 weights vs fp32 rollout
+        # noise / conditioner) so the backbone is the single dtype boundary.
+        dt = next(self.transformer.parameters()).dtype
+        x_cfhw = x_cfhw.to(dt)
+        padding_mask = torch.zeros(B, 1, H, W, device=x_cfhw.device, dtype=dt)
         out = self.transformer(
-            hidden_states=x_cfhw, timestep=timestep, encoder_hidden_states=cond,
+            hidden_states=x_cfhw, timestep=timestep,
+            encoder_hidden_states=(cond.to(dt) if cond is not None else cond),
             padding_mask=padding_mask, return_dict=False,
         )
         return out[0] if isinstance(out, (tuple, list)) else out
@@ -92,9 +137,19 @@ class CosmosBackbone(DiTBackbone):
         return self._to_fchw(x)
 
     def forward_cached(self, latent_block, timestep, cond, *, kv_cache: KVCache, start_frame, commit=True):
-        raise NotImplementedError(
-            "Cosmos cached rollout needs CosmosRotaryPosEmbed sliced to absolute "
-            "frame positions (start_frame), which is not wired yet. Use the Wan "
-            "backbone for validated cached rollout, or run a masked rollout via "
-            "forward_train. See docs/AUTOREGRESSIVE.md."
-        )
+        B, Fr, C, H, W = latent_block.shape
+        ctx = self.context
+        ctx.mode = "cache"
+        ctx.kv_cache = kv_cache
+        ctx.commit = commit
+        # offset RoPE to this block's absolute frame positions (Cosmos's stock
+        # rope always starts at frame 0); the patched attn proc reads/grows the cache.
+        rope = self.transformer.rope
+        orig_forward = rope.forward
+        rope.forward = lambda hs, fps=None: _offset_rope_cosmos(rope, hs, fps, start_frame)  # type: ignore[assignment]
+        try:
+            x = self._call(self._to_cfhw(latent_block), timestep, cond)
+        finally:
+            rope.forward = orig_forward  # type: ignore[assignment]
+            ctx.mode = "off"
+        return self._to_fchw(x)

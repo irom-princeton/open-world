@@ -41,15 +41,18 @@ class FlowMatchScheduler:
         return s * sigma / (1 + (s - 1) * sigma)
 
     # -- noising ---------------------------------------------------------
+    # sigma is built in fp32; cast to the operand dtype so a bf16 latent stays
+    # bf16 (otherwise the multiply promotes to fp32 and leaks fp32 into the loss
+    # graph, breaking the bf16 backward).
     def add_noise(self, x0: torch.Tensor, eps: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
-        sigma = sigma.view(-1, *([1] * (x0.ndim - 1)))
+        sigma = sigma.view(-1, *([1] * (x0.ndim - 1))).to(x0.dtype)
         return (1 - sigma) * x0 + sigma * eps
 
     def velocity_target(self, x0: torch.Tensor, eps: torch.Tensor) -> torch.Tensor:
         return eps - x0
 
     def x0_from_velocity(self, x_sigma: torch.Tensor, v_pred: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
-        sigma = sigma.view(-1, *([1] * (x_sigma.ndim - 1)))
+        sigma = sigma.view(-1, *([1] * (x_sigma.ndim - 1))).to(x_sigma.dtype)
         return x_sigma - sigma * v_pred
 
     def step_sigma(self, i: int, device, batch: int) -> torch.Tensor:

@@ -49,10 +49,10 @@ configs/training/      ar_wan_1_3b.py · ar_cosmos2_2b.py
 
 `tests/test_ar.py` asserts the property the whole design rests on: the **KV-cache
 rollout reproduces the block-causal masked forward exactly** — `max|full −
-cached_rollout| = 0.0` on the DummyDiT *and* on the real diffusers Wan
-transformer (RoPE-offset included), for both unbounded and sliding-window
-(`max_kv_blocks`) memory. So the autoregressive memory is mathematically the same
-computation as the trained-with mask, just streamed.
+cached_rollout| = 0.0` on the DummyDiT *and* on the real diffusers Wan **and
+Cosmos** transformers (RoPE-offset included), for both unbounded and
+sliding-window (`max_kv_blocks`) memory. So the autoregressive memory is
+mathematically the same computation as the trained-with mask, just streamed.
 
 * Token layout: a video latent is `F` frames × `tokens_per_frame`; frames are
   grouped into blocks of `frames_per_block`; a query attends to its block + all
@@ -67,7 +67,7 @@ computation as the trained-with mask, just streamed.
 | key | model | status |
 |---|---|---|
 | `wan_1_3b` | Wan2.1-T2V-1.3B (`WanTransformer3DModel`) | **recommended.** `forward_train` (block-causal mask) + `forward_cached` (KV-cache, RoPE-offset) both validated against real weights. The Self-Forcing recipe was built on Wan. |
-| `cosmos_predict2_2b` | Cosmos-Predict2-2B (`CosmosTransformer3DModel`) | OmniDreams's own substrate. `forward_train` validated. **Cached rollout (RoPE offset) not yet wired** — train with the exact masked forward; use Wan for cached rollout. |
+| `cosmos_predict2_2b` | Cosmos-Predict2-2B (`CosmosTransformer3DModel`) | OmniDreams's own substrate. `forward_train` + `forward_cached` (KV-cache, RoPE-offset via `cosmos_predict2.py:_offset_rope_cosmos`, mirroring OmniDreams' `start_frame_for_rope`) both validated (`tests/test_ar.py`). |
 | `svd` | legacy SVD UNet | intentionally not implemented — UNet+temporal-conv is the wrong substrate for block-causal+cache; the bidirectional `CrtlWorld` remains for the baseline. |
 | `dummy` | tiny CPU DiT | tests only. |
 
@@ -92,18 +92,58 @@ uv sync --extra autoregressive                       # env (this branch)
 python -m openworld.autoregressive.train_self_forcing --smoke   # weightless sanity
 .venv/bin/python -m pytest openworld/autoregressive/tests -q    # unit tests
 
-# GPU (this cluster is offline on compute nodes — use sbatch, not the login node):
-bash scripts/download_ar_weights.sh                  # login node: Wan transformer + VAE -> external/
-sbatch scripts/ar_gpu.slurm .venv/bin/python scripts/smoke_wan_real.py   # real-weights GPU smoke
-sbatch scripts/ar_gpu.slurm accelerate launch -m openworld.autoregressive.train_self_forcing \
-    --config configs/training/ar_wan_1_3b.py         # real distillation
+# GPU (this cluster is offline on compute nodes — use sbatch, not the login node).
+# Per-stage launchers live under bash_scripts/ (see bash_scripts/README.md):
+bash   bash_scripts/download_weights.sh                  # login node: Wan transformer + VAE -> external/
+sbatch bash_scripts/data_process/preprocess_latents.sh   # stage 1: RGB -> 16-ch Wan-VAE latents
+sbatch bash_scripts/data_process/validate_data.sh        # stage 1 check: latents -> real Wan forward
+sbatch bash_scripts/training/train_wan.sh                # stage 2: self-forcing / DMD distillation (Wan)
+sbatch bash_scripts/training/train_cosmos.sh             # stage 2: same, Cosmos backbone
+CKPT=checkpoints/ar_wm/ar_wan_droid/checkpoint-50000.pt \
+  sbatch bash_scripts/inference/replay_wan.sh            # stage 3: open-loop trajectory replay
+
+# Ad-hoc commands still go through the generic runner:
+sbatch bash_scripts/ar_gpu.slurm .venv/bin/python scripts/smoke_wan_real.py   # real-weights GPU smoke
 ```
 
 **Offline-cluster loading gotcha:** the compute nodes have no internet, and
 diffusers' sharded-checkpoint loader pings the Hub for a bare repo id *even with*
 `HF_HUB_OFFLINE=1`. So weights must be loaded from a **local directory**
 (`backbone_ckpt="external/Wan2.1-T2V-1.3B-Diffusers"`, set in the Wan config).
-`scripts/ar_gpu.slurm` exports `HF_HUB_OFFLINE=1`/`HF_HOME` for you.
+`bash_scripts/ar_gpu.slurm` exports `HF_HUB_OFFLINE=1`/`HF_HOME` for you.
+
+## Inference: open-loop trajectory replay
+
+The first inference setup (a stand-in for the eventual closed-loop "interact with
+any policy" entrypoint). Given a ground-truth trajectory (preprocessed latents +
+recorded actions, e.g. the `val` split): prime the model with the first
+ground-truth frame(s), feed the **full recorded action sequence open-loop**, and
+let the student autoregressively generate the rest. The generated and
+ground-truth latents are decoded with the Wan VAE and written **side by side**
+(GT | PRED) per episode, with per-episode latent/pixel MSE + PSNR.
+
+```bash
+# launcher (Cosmos: bash_scripts/inference/replay_cosmos.sh):
+CKPT=checkpoints/ar_wm/ar_wan_droid/checkpoint-50000.pt \
+  sbatch bash_scripts/inference/replay_wan.sh
+
+# or the underlying entrypoint directly:
+sbatch bash_scripts/ar_gpu.slurm .venv/bin/python scripts/replay_ar.py \
+    --config configs/training/ar_wan_droid.py \
+    --checkpoint checkpoints/ar_wm/ar_wan_droid/checkpoint-50000.pt \
+    --latent-root data/droid_ar_latents --split val \
+    --history-blocks 1 --output-dir checkpoints/ar_wm/ar_wan_droid/replay
+```
+
+* `--history-blocks` is the number of ground-truth blocks used to prime the cache
+  (`1` ≈ "first frame only"); the rest is generated.
+* Reusable core lives in `openworld/autoregressive/infer/replay.py` (latent-space,
+  decode-free → CPU-testable: `tests/test_replay.py`); VAE decode is
+  `data/decode.py` (`VaeLatentDecoder`, the inverse of `data/encode.py`).
+* Without `--checkpoint` the untrained backbone runs — validates the full
+  inference plumbing (build → rollout → decode → side-by-side video) end to end,
+  but the video is noise. Verified on A100: a `val` clip produces a `[29, 576,
+  644, 3]` side-by-side mp4 (8 latent → 29 RGB frames, 3 views × 192px, 2×320px+gap).
 
 ## Validated on H200 (real weights)
 
@@ -116,19 +156,36 @@ diffusers' sharded-checkpoint loader pings the Hub for a bare repo id *even with
 * **~34 ms / block** (2 latent frames, single forward, bf16, 320² 1 view) → a
   2-step distilled rollout ≈ ~85 ms/block ≈ **~90 fps effective single-view** —
   the OmniDreams/FlashDreams real-time regime.
+* **Full data → training-step chain validated** (`scripts/validate_train_step.py`):
+  DROID annotations → format adapter → Wan-VAE 16-ch latents (3 cams height-stacked,
+  72×40) → `ARLatentDataset` → the **full self-forcing / DMD loop on three real
+  Wan-1.3B models** (generator KV-cache rollout + online critic + CFG'd frozen
+  teacher) produces finite, decreasing losses on the H200 (`gen_loss≈0.46`,
+  `critic_loss 0.51→0.19` over 3 steps with random-init teacher).
+
+## Dtype
+
+Weights load in bf16 and the self-forcing loop does **not** autocast (the three
+models aren't `accelerator.prepare`'d), so the whole graph must run in one dtype:
+
+* the backbone `_call` casts its inputs to the transformer's weight dtype (the
+  single dtype boundary — rollout noise / conditioner may arrive fp32);
+* `generate_rollout` draws block noise in the generator's parameter dtype;
+* `FlowMatchScheduler.add_noise` / `x0_from_velocity` cast `sigma` (built fp32) to
+  the latent dtype — otherwise the multiply promotes a bf16 latent back to fp32
+  and that fp32 leaks into the loss, breaking the bf16 backward (regression-tested
+  by `test_scheduler_preserves_dtype`);
+* `train_self_forcing.main` casts models + batch to `cfg.dtype`.
 
 ## What still needs real weights / a GPU (honest status)
 
-* **VAE re-encode (required).** Wan/Cosmos use **16-channel** latents from their
-  own VAEs; the existing LIBERO dataset stores **4-channel SVD-VAE** latents. The
-  dataset must be re-encoded with the backbone VAE before training (a
-  `scripts/preprocess_ar_latents.py` analogous to the SVD preprocessor — TODO).
+* ~~**VAE re-encode (required).**~~ **Done.** `scripts/preprocess_ar_latents.py`
+  re-encodes any registered data format (currently `droid_ctrl_world`) into the
+  backbone VAE's **16-channel** latents on disk; `ARLatentDataset` consumes them.
   `cfg.in_channels` reflects the backbone.
 * **Stage-0 weights.** Point `student_init_ckpt` (E1: causal-student init) and
   `teacher_ckpt` (E2: robot-finetuned bidirectional teacher) at real checkpoints;
   the critic is initialised from the teacher.
-* **Cosmos cached rollout** — wire `CosmosRotaryPosEmbed` frame-offset (mirror
-  `backbones/wan.py:_offset_rope`).
 * **`sequence_pack` multiview** — the OmniDreams layout (per-view latents +
   view-id embedding) needs the preprocessor to emit per-view latents; the default
   `height_stack` works with the current dataset unchanged.

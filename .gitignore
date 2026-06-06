@@ -15,7 +15,7 @@ env/
 *.ckpt
 wandb/
 outputs/
-test/
+/test/
 logs/
 models/
 videos/
@@ -23,9 +23,9 @@ videos/
 
 bash_scripts/
 checkpoints/
-data/
+/data/
 external/*
 !external/download_models.sh
-tests/
+/tests/
 tmp_*
 slurm_outputs/
