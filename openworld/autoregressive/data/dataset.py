@@ -15,6 +15,7 @@ height-stacked, actions normalised to [-1, 1].
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import random
@@ -22,6 +23,31 @@ import random
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+
+
+def _load_sample_list(root: str, split: str) -> list[dict]:
+    """Read the episode index for ``split``.
+
+    Prefers the consolidated ``<split>_sample.json``; otherwise concatenates the
+    per-shard ``<split>_sample.part*of*.json`` files written by a sharded
+    preprocess run (deduped by ``ep_id``) — so a parallel run needs no merge step.
+    """
+    single = os.path.join(root, f"{split}_sample.json")
+    if os.path.exists(single):
+        with open(single) as f:
+            return json.load(f)
+    seen, samples = set(), []
+    for p in sorted(glob.glob(os.path.join(root, f"{split}_sample.part*of*.json"))):
+        with open(p) as f:
+            for s in json.load(f):
+                if s["ep_id"] not in seen:
+                    seen.add(s["ep_id"])
+                    samples.append(s)
+    if not samples:
+        raise FileNotFoundError(
+            f"no {split}_sample.json (or {split}_sample.part*of*.json) under {root}"
+        )
+    return samples
 
 
 class ARLatentDataset(Dataset):
@@ -33,8 +59,7 @@ class ARLatentDataset(Dataset):
         # window length in latent frames = (history + rollout) blocks * frames/block
         self.clip = (cfg.num_history_blocks + cfg.rollout_blocks) * cfg.frames_per_block
 
-        with open(os.path.join(self.root, f"{split}_sample.json")) as f:
-            samples = json.load(f)
+        samples = _load_sample_list(self.root, split)
         self.samples = [s for s in samples if s["num_latent_frames"] >= self.clip]
         if not self.samples:
             raise RuntimeError(

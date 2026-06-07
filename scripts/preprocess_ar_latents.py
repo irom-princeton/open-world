@@ -63,26 +63,50 @@ def process_split(fmt, enc, split, out, *, limit, min_latent_frames, num_shards=
     os.makedirs(os.path.join(out, split), exist_ok=True)
     tag = f"{split} shard {shard_id}/{num_shards}" if num_shards > 1 else split
     sample_list = []
+    resumed = skipped = failed = 0
     for i, ep_id in enumerate(ep_ids):
-        ep = fmt.load_episode(ep_id, split)
-        Lf = enc.latent_frames(ep.num_frames)
-        if Lf < min_latent_frames:
+        out_path = os.path.join(out, split, f"{ep_id}.pt")
+        # resume: a prior (possibly crashed) run may have already encoded this ep.
+        if os.path.exists(out_path):
+            try:
+                Lf = int(torch.load(out_path, map_location="cpu")["num_latent_frames"])
+                sample_list.append({"ep_id": ep_id, "num_latent_frames": Lf})
+                resumed += 1
+                continue
+            except Exception:
+                os.remove(out_path)                        # corrupt/partial write -> redo
+        try:
+            ep = fmt.load_episode(ep_id, split)
+            Lf = enc.latent_frames(ep.num_frames)
+            if Lf < min_latent_frames:
+                skipped += 1
+                continue
+            cams = []
+            for vp in ep.video_paths:
+                rgb = fmt.read_frames(vp)                   # [T,H,W,3] uint8
+                cams.append(enc.encode_video(rgb))         # [16,Lf,h,w]
+            # views can disagree by a frame (uneven raw clip lengths) -> clip to min
+            min_lf = min(c.shape[1] for c in cams)
+            cams = [c[:, :min_lf] for c in cams]
+            latent = torch.stack(cams, dim=0)              # [V,16,Lf,h,w]
+            Lf = latent.shape[2]                           # actual, post-encode
+            if Lf < min_latent_frames:
+                skipped += 1
+                continue
+            action = align_actions_to_latent(ep.actions, Lf)   # [Lf,7] raw
+            torch.save(
+                {"latent": latent, "action": torch.from_numpy(action).float(),
+                 "text": ep.text, "num_latent_frames": int(Lf)},
+                out_path,
+            )
+            sample_list.append({"ep_id": ep_id, "num_latent_frames": int(Lf)})
+        except Exception as e:
+            failed += 1
+            print(f"[{tag}] SKIP ep {ep_id}: {type(e).__name__}: {e}", flush=True)
             continue
-        cams = []
-        for vp in ep.video_paths:
-            rgb = fmt.read_frames(vp)                       # [T,H,W,3] uint8
-            cams.append(enc.encode_video(rgb))             # [16,Lf,h,w]
-        latent = torch.stack(cams, dim=0)                  # [V,16,Lf,h,w]
-        Lf = latent.shape[2]                               # actual, post-encode
-        action = align_actions_to_latent(ep.actions, Lf)   # [Lf,7] raw
-        torch.save(
-            {"latent": latent, "action": torch.from_numpy(action).float(),
-             "text": ep.text, "num_latent_frames": int(Lf)},
-            os.path.join(out, split, f"{ep_id}.pt"),
-        )
-        sample_list.append({"ep_id": ep_id, "num_latent_frames": int(Lf)})
         if (i + 1) % 50 == 0 or i + 1 == len(ep_ids):
-            print(f"[{tag}] {i + 1}/{len(ep_ids)}  (kept {len(sample_list)})", flush=True)
+            print(f"[{tag}] {i + 1}/{len(ep_ids)}  (kept {len(sample_list)}, "
+                  f"resumed {resumed}, skipped {skipped}, failed {failed})", flush=True)
     with open(_sample_path(out, split, num_shards, shard_id), "w") as f:
         json.dump(sample_list, f)
     return sample_list
@@ -180,17 +204,20 @@ def main():
                       min_latent_frames=args.min_latent_frames,
                       num_shards=args.num_shards, shard_id=args.shard_id)
 
-    # Unsharded run finalizes here; sharded runs defer to a single --merge pass
-    # (so stats aren't computed N times / from partial data).
-    if args.num_shards <= 1:
+    # stats.json depends only on annotations (not on other shards' outputs), so
+    # the shard-0 task writes it itself -> the array is self-contained, no merge
+    # job needed (the dataset reads the per-shard sample lists directly).
+    if args.num_shards <= 1 or args.shard_id == 0:
         stats = compute_action_stats(fmt, args.stats_split, sample_size=args.stats_sample, limit=args.limit)
         with open(os.path.join(args.out, "stats.json"), "w") as f:
             json.dump(stats, f, indent=2)
         print("wrote stats.json:", stats, flush=True)
+    if args.num_shards <= 1:
         print("PREPROCESS DONE")
     else:
-        print(f"SHARD {args.shard_id}/{args.num_shards} DONE "
-              f"(run --merge after all shards finish)")
+        extra = " (+ stats.json)" if args.shard_id == 0 else ""
+        print(f"SHARD {args.shard_id}/{args.num_shards} DONE{extra} "
+              f"(no merge needed; dataset reads part files directly)")
 
 
 if __name__ == "__main__":

@@ -64,15 +64,21 @@ def dmd_generator_loss(
     eps = torch.randn_like(x0)
     x_sigma = scheduler.add_noise(x0, eps, sigma)
     t = scheduler.to_timestep(sigma)
+    # The score fns return fp32; under bf16 autocast x0 is bf16. Do the DMD target
+    # arithmetic and the MSE in fp32 so the two near-equal tensors subtract cleanly
+    # and the loss/backward dtypes match (bf16 x0 vs fp32 target would otherwise
+    # raise "Found dtype BFloat16 but expected Float" in backward). x0.float() keeps
+    # the grad path to the generator.
+    x0f = x0.float()
     with torch.no_grad():
         v_real = real_score_fn(x_sigma, t, cond)
         v_fake = fake_score_fn(x_sigma, t, cond)
-        x0_real = scheduler.x0_from_velocity(x_sigma, v_real, sigma)
-        x0_fake = scheduler.x0_from_velocity(x_sigma, v_fake, sigma)
+        x0_real = scheduler.x0_from_velocity(x_sigma, v_real, sigma).float()
+        x0_fake = scheduler.x0_from_velocity(x_sigma, v_fake, sigma).float()
         grad = x0_fake - x0_real                          # DMD gradient direction
-        norm = _per_sample_mean(x0 - x0_real) + 1e-3      # scale-normalise (DMD2)
-        target = (x0 - grad / norm).detach()
-    loss = 0.5 * F.mse_loss(x0, target)
+        norm = _per_sample_mean(x0f - x0_real) + 1e-3      # scale-normalise (DMD2)
+        target = (x0f - grad / norm).detach()
+    loss = 0.5 * F.mse_loss(x0f, target)
     return loss, {"dmd_grad_norm": grad.detach().abs().mean().item()}
 
 
@@ -93,7 +99,7 @@ def critic_denoising_loss(
     eps = torch.randn_like(x0)
     x_sigma = scheduler.add_noise(x0, eps, sigma)
     t = scheduler.to_timestep(sigma)
-    v_pred = fake_score_fn(x_sigma, t, cond)
+    v_pred = fake_score_fn(x_sigma, t, cond)              # fp32 (score fn casts)
     v_target = scheduler.velocity_target(x0, eps)
-    loss = F.mse_loss(v_pred, v_target)
+    loss = F.mse_loss(v_pred.float(), v_target.float())   # fp32 MSE (x0/eps may be bf16)
     return loss, {"critic_loss": loss.detach().item()}

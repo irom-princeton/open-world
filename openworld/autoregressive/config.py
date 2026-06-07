@@ -75,15 +75,57 @@ class ARWMArgs:
     critic_learning_rate: float = 6e-6  # DMD fake-score / critic lr
     gradient_accumulation_steps: int = 1
     mixed_precision: str = "bf16"
+    # Shard the generator/critic/teacher + optimizer states across GPUs with FSDP2
+    # (torch ``fully_shard``) when launched on >1 process. Required to fit fp32
+    # master weights for the 3-model self-forcing stack -- plain DDP replicates the
+    # full models per GPU and OOMs. No effect on a single process. Compute precision
+    # is still driven by ``mixed_precision`` (bf16 autocast over fp32 master).
+    use_fsdp: bool = True
     train_batch_size: int = 1
     shuffle: bool = True
     max_train_steps: int = 200_000
-    checkpointing_steps: int = 5_000
+    # Step-based checkpoint retention. A *rolling* checkpoint is rewritten every
+    # ``checkpointing_steps`` (~1h of wall-clock) and the previous rolling file is
+    # deleted once the new one lands -- a crash-safety net that never grows. A
+    # *permanent* checkpoint is kept every ``permanent_checkpoint_steps`` (~8h) and
+    # never deleted. Between two permanents only the single latest rolling file
+    # occupies disk.
+    #
+    # The step counts assume ~500 steps/h, an *estimate* for Wan-1.3B self-forcing
+    # (6 rollouts/step x 8 blocks x 2 denoise steps) on an H200; data-parallel DDP
+    # keeps per-step wall time ~constant regardless of GPU count, so this holds for
+    # multi-GPU runs too. The trainer logs measured "steps/h" after warmup -- snap
+    # these to your real rate once you see it (rolling ~= steps/h, permanent = 8x).
+    checkpointing_steps: int = 500
+    permanent_checkpoint_steps: int = 4_000
+    # Crash-safe resume. Alongside the (generator-only) inference checkpoints above,
+    # write ONE full training-state bundle (generator + online critic + both AdamW
+    # optimizer states + step) every ``checkpointing_steps``, overwritten in place
+    # so only a single ~30 GB file ever exists. On startup the trainer auto-resumes
+    # from ``<output_dir>/training_state.pt`` if present (set ``resume_from`` to load
+    # a specific path instead), continuing *exactly* from the cut point. Disable to
+    # save disk if you don't need mid-run resume.
+    save_resume_state: bool = True
+    resume_from: str | None = None
     validation_steps: int = 1_000
     max_grad_norm: float = 1.0
     video_num: int = 4
     num_workers: int = 4
     seed: int = 0
+
+    # ---------------- qualitative sample previews -------------------
+    # At every checkpoint save we run open-loop AR replay on a few random ``val``
+    # episodes, VAE-decode GT|PRED side-by-side, and log them to wandb as videos.
+    # The rollout reuses the same KV-cached path as training, so it is FSDP-safe
+    # (the forward all-gathers fire on every rank); episode selection is seeded by
+    # step so all ranks pick the same episodes and only rank 0 decodes/logs.
+    log_samples: bool = True
+    num_sample_videos: int = 2        # random val episodes previewed per checkpoint
+    sample_history_blocks: int = 1    # ground-truth blocks used to prime ("first frame")
+    sample_max_blocks: int = 8        # cap generated blocks for a fast preview (0 = to ep end)
+    sample_video_fps: int = 8
+    # Wan VAE used to decode 16-ch latents -> RGB (Cosmos latents use it too).
+    vae_dir: str = "external/Wan2.1-T2V-1.3B-Diffusers"
 
     # ---------------- data (precomputed latents) ----------------
     # The framework ingests any raw format via a format adapter

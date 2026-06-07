@@ -87,6 +87,61 @@ def test_self_forcing_smoke_updates_generator():
     assert all(math.isfinite(v) for v in logs.values())
 
 
+def test_resume_roundtrip_restores_full_training_state(tmp_path):
+    """A cut run resumes *exactly*: generator + online critic + both AdamW
+    optimizer states + step round-trip through the resume bundle (CPU path)."""
+    import torch
+
+    from openworld.autoregressive.config import ARWMArgs
+    from openworld.autoregressive.distill.scheduler import FlowMatchScheduler
+    from openworld.autoregressive.distill.self_forcing import SelfForcingTrainer
+    from openworld.autoregressive.model import build_training_stack
+    from openworld.autoregressive.train_self_forcing import (
+        _gather_train_state, _latent_block_shape, _restore_train_state, _save_resume_atomic,
+    )
+
+    def _stack():
+        cfg = ARWMArgs(backbone="dummy", random_init_backbone=True, num_cams=1,
+                       frames_per_block=2, rollout_blocks=2, num_history_blocks=1,
+                       denoising_step_list=(1000, 500), critic_steps_per_gen_step=1,
+                       width=32, height=32, action_dim=7, dtype=torch.float32)
+        gen, critic, teacher = build_training_stack(cfg)
+        sched = FlowMatchScheduler(cfg.denoising_step_list,
+                                   num_train_timestep=cfg.num_train_timestep, warp=cfg.warp_denoising_step)
+        tr = SelfForcingTrainer(gen, critic, teacher, sched, frames_per_block=cfg.frames_per_block,
+                                critic_steps=cfg.critic_steps_per_gen_step)
+        return cfg, gen, critic, tr
+
+    torch.manual_seed(0)
+    cfg, gen, critic, tr = _stack()
+    # take a couple of real steps so the optimizers have non-trivial moment buffers
+    shape = _latent_block_shape(cfg, 1)
+    T = cfg.frames_per_block * (cfg.rollout_blocks + cfg.num_history_blocks)
+    for _ in range(2):
+        cond = gen.encode_cond(torch.randn(1, T, cfg.action_dim), cfg_drop=True)
+        tr.train_step(cond, gen.null_cond_like(cond), num_blocks=cfg.rollout_blocks, latent_block_shape=shape)
+    state = _gather_train_state(gen, critic, tr.opt_g, tr.opt_c, step=2, distributed=False)
+    path = _save_resume_atomic(state, tmp_path)
+    assert path.exists() and not path.with_suffix(".pt.tmp").exists()  # atomic: no temp left
+
+    # fresh stack (different random init) then restore -> must match the saved one
+    torch.manual_seed(123)
+    cfg2, gen2, critic2, tr2 = _stack()
+    g_before = next(gen2.parameters()).clone()
+    step = _restore_train_state(path, gen2, critic2, tr2.opt_g, tr2.opt_c, distributed=False)
+    assert step == 2
+    assert not torch.allclose(next(gen2.parameters()), g_before)        # actually loaded
+    for (k, a), (_, b) in zip(gen.state_dict().items(), gen2.state_dict().items()):
+        assert torch.allclose(a, b), f"gen param {k} mismatch after resume"
+    for (k, a), (_, b) in zip(critic.state_dict().items(), critic2.state_dict().items()):
+        assert torch.allclose(a, b), f"critic param {k} mismatch after resume"
+    # optimizer momentum buffers restored
+    s1 = tr.opt_g.state_dict()["state"]; s2 = tr2.opt_g.state_dict()["state"]
+    assert s1 and s2 and set(s1) == set(s2)
+    for pid in s1:
+        assert torch.allclose(s1[pid]["exp_avg"], s2[pid]["exp_avg"])
+
+
 def _cosmos(cross=32):
     """Tiny real Cosmos DiT (random init, 2 layers) — CPU/CI friendly."""
     from openworld.autoregressive.backbones.cosmos_predict2 import CosmosBackbone
