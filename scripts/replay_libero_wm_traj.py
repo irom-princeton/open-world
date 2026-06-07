@@ -121,8 +121,16 @@ def replay_episode(
     action_norm: np.ndarray,        # (T, 7) normalized, at WM rate, 1:1 with latents
     text: str, device: torch.device,
     num_inference_steps: int, skip: int, max_chunks: int | None,
+    start_anchor: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, list[int]]:
-    """Closed-loop rollout. Returns (gt_stack, pred_stack, predicted_indices)."""
+    """Closed-loop rollout. Returns (gt_stack, pred_stack, predicted_indices).
+
+    ``start_anchor`` is the first frame to predict from. Default
+    (``num_history * skip_his``) keeps a real-GT history warmup. Pass ``0`` for
+    "first frame only" context: the rollout starts at frame 0, the history
+    window collapses onto frame 0 (negative indices are clamped), and every
+    later frame is predicted from the model's own previous predictions.
+    """
     T = int(latent_gt.shape[0])
     num_history, num_frames = args.num_history, args.num_frames
     skip_his = skip * 4  # matches dataset._build_frame_ids (history is 4x coarser)
@@ -130,7 +138,7 @@ def replay_episode(
     # rolled[t] = latent we believe represents frame t; seed with GT, overwrite with preds.
     rolled = [latent_gt[t].clone() for t in range(T)]
 
-    first_anchor = num_history * skip_his  # so history indices stay >= 0
+    first_anchor = num_history * skip_his if start_anchor is None else start_anchor
     step = (num_frames - 1) * skip         # chain: last pred frame -> next anchor
     if first_anchor + (num_frames - 1) * skip >= T:
         raise RuntimeError(f"episode too short: T={T}")
@@ -146,9 +154,12 @@ def replay_episode(
 
         rgb_id = build_frame_ids(frame_now, num_history, num_frames, skip, skip_his)
         state_id = [min(max(r, 0), T - 1) for r in rgb_id]  # action at same frame as latent
+        # Clamp negatives to 0 so an early anchor collapses history onto frame 0
+        # (Python's negative indexing would otherwise grab end-of-trajectory frames).
+        hist_id = [min(max(r, 0), T - 1) for r in rgb_id]
 
-        history = torch.stack([rolled[rgb_id[i]] for i in range(num_history)], 0).unsqueeze(0).to(device)
-        current = rolled[rgb_id[num_history]].unsqueeze(0).to(device)
+        history = torch.stack([rolled[hist_id[i]] for i in range(num_history)], 0).unsqueeze(0).to(device)
+        current = rolled[hist_id[num_history]].unsqueeze(0).to(device)
         action = torch.tensor(action_norm[state_id], dtype=torch.float32).unsqueeze(0).to(device)
 
         with torch.cuda.amp.autocast(enabled=True, dtype=torch.float16):
