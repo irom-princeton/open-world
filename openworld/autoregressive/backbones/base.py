@@ -47,6 +47,7 @@ class DiTBackbone(nn.Module, ABC):
         *,
         frames_per_block: int,
         window: int | None = None,
+        causal: bool = True,          # False -> full bidirectional attention (teacher)
     ) -> torch.Tensor:                # velocity, same shape as latents
         ...
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 
+import pytest
 import torch
 
 
@@ -85,6 +86,57 @@ def test_self_forcing_smoke_updates_generator():
     logs = run_smoke(steps=1)
     assert set(logs) == {"gen_loss", "critic_loss"}
     assert all(math.isfinite(v) for v in logs.values())
+
+
+def test_bidirectional_forward_differs_from_causal():
+    """forward_train(causal=False) gives full bidirectional attention -> a
+    different result than the block-causal path (the L1b teacher mode)."""
+    import torch
+
+    from openworld.autoregressive.config import ARWMArgs
+    from openworld.autoregressive.model import ARWorldModel
+    torch.manual_seed(0)
+    cfg = ARWMArgs(backbone="dummy", random_init_backbone=True, num_cams=1,
+                   frames_per_block=2, width=32, height=32, action_dim=7, dtype=torch.float32)
+    m = ARWorldModel(cfg).eval()
+    F = 6
+    x = torch.randn(1, F, cfg.in_channels, cfg.latent_h_total, cfg.latent_w)
+    t = torch.full((1,), 500.0)
+    cond = m.encode_cond(torch.randn(1, F, cfg.action_dim), cfg_drop=False)
+    with torch.no_grad():
+        v_causal = m.forward_train(x, t, cond, frames_per_block=2, causal=True)
+        v_bidir = m.forward_train(x, t, cond, frames_per_block=2, causal=False)
+    assert v_causal.shape == x.shape == v_bidir.shape
+    assert torch.isfinite(v_bidir).all()
+    assert not torch.allclose(v_causal, v_bidir)   # masking actually changed attention
+
+
+@pytest.mark.parametrize("causal", [True, False])
+def test_midtrain_step_updates_model(causal):
+    """A flow-matching mid-training step (student-init causal / teacher bidirectional)
+    yields a finite loss and moves the weights."""
+    import torch
+
+    from openworld.autoregressive.config import ARWMArgs
+    from openworld.autoregressive.distill.midtrain import DiffusionTrainer
+    from openworld.autoregressive.distill.scheduler import FlowMatchScheduler
+    from openworld.autoregressive.model import ARWorldModel
+    torch.manual_seed(0)
+    cfg = ARWMArgs(backbone="dummy", random_init_backbone=True, num_cams=1,
+                   frames_per_block=2, num_history_blocks=1, rollout_blocks=2,
+                   width=32, height=32, action_dim=7, dtype=torch.float32)
+    model = ARWorldModel(cfg)
+    sched = FlowMatchScheduler(cfg.denoising_step_list, num_train_timestep=cfg.num_train_timestep,
+                               warp=cfg.warp_denoising_step)
+    tr = DiffusionTrainer(model, sched, frames_per_block=cfg.frames_per_block, causal=causal)
+    F = (cfg.num_history_blocks + cfg.rollout_blocks) * cfg.frames_per_block
+    before = next(model.parameters()).clone()
+    latent = torch.randn(1, F, cfg.in_channels, cfg.latent_h_total, cfg.latent_w)
+    cond = model.encode_cond(torch.randn(1, F, cfg.action_dim), cfg_drop=True)
+    logs = tr.train_step(latent, cond)
+    assert set(logs) == {"loss", "grad_norm"}
+    assert math.isfinite(logs["loss"]) and math.isfinite(logs["grad_norm"])
+    assert not torch.allclose(next(model.parameters()), before)
 
 
 def test_resume_roundtrip_restores_full_training_state(tmp_path):

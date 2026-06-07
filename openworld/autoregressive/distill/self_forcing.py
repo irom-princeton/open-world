@@ -121,6 +121,9 @@ class SelfForcingTrainer:
         real_cfg: float = 3.5,
         dmd_lo: float = 0.02,
         dmd_hi: float = 0.98,
+        betas: tuple[float, float] = (0.9, 0.999),
+        weight_decay: float = 0.0,
+        max_grad_norm: float = 0.0,        # 0 -> no clipping
     ):
         self.g, self.critic, self.teacher = generator, critic, teacher
         self.sched = scheduler
@@ -128,10 +131,17 @@ class SelfForcingTrainer:
         self.critic_steps = critic_steps
         self.real_cfg = real_cfg
         self.lo, self.hi = dmd_lo, dmd_hi
+        self.max_grad_norm = max_grad_norm
         for p in self.teacher.parameters():
             p.requires_grad_(False)
-        self.opt_g = torch.optim.AdamW(self.g.parameters(), lr=gen_lr)
-        self.opt_c = torch.optim.AdamW(self.critic.parameters(), lr=critic_lr)
+        self.opt_g = torch.optim.AdamW(self.g.parameters(), lr=gen_lr,
+                                       betas=betas, weight_decay=weight_decay)
+        self.opt_c = torch.optim.AdamW(self.critic.parameters(), lr=critic_lr,
+                                       betas=betas, weight_decay=weight_decay)
+
+    def _clip(self, params):
+        if self.max_grad_norm and self.max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
 
     def _score_fns(self, null_cond):
         real = make_cfg_score_fn(self.teacher, frames_per_block=self.fpb, null_cond=null_cond, scale=self.real_cfg)
@@ -158,6 +168,7 @@ class SelfForcingTrainer:
                   for x0 in blocks]
         total = torch.stack(losses).sum()
         total.backward()
+        self._clip(self.critic.parameters())
         self.opt_c.step()
         return (total / max(1, len(losses))).item()
 
@@ -172,6 +183,7 @@ class SelfForcingTrainer:
         # All blocks share the cond + backbone graph -> one backward over the sum.
         total = torch.stack(losses).sum()
         total.backward()
+        self._clip(self.g.parameters())
         self.opt_g.step()
         return (total / len(losses)).item()
 

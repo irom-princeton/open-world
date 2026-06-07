@@ -131,13 +131,17 @@ class CosmosBackbone(DiTBackbone):
             )
         return out[0] if isinstance(out, (tuple, list)) else out
 
-    def forward_train(self, latents, timestep, cond, *, frames_per_block, window=None):
+    def forward_train(self, latents, timestep, cond, *, frames_per_block, window=None, causal=True):
         B, Fr, C, H, W = latents.shape
         tpf = (H // self.patch_spatial) * (W // self.patch_spatial)
-        bids = block_ids_for_video(Fr, tpf, frames_per_block, device=latents.device)
         ctx = self.context
-        ctx.mode = "train"
-        ctx.dense_mask = dense_block_causal_mask(bids, bids, window=window)
+        if causal:
+            bids = block_ids_for_video(Fr, tpf, frames_per_block, device=latents.device)
+            ctx.mode = "train"
+            ctx.dense_mask = dense_block_causal_mask(bids, bids, window=window)
+        else:
+            ctx.mode = "off"            # full bidirectional attention (teacher mid-training)
+            ctx.dense_mask = None
         x = self._call(self._to_cfhw(latents), timestep, cond)
         ctx.mode = "off"
         return self._to_fchw(x)

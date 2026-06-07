@@ -70,9 +70,29 @@ class ARWMArgs:
     backbone_ckpt: str | None = None    # local path / HF repo override; None -> preset hf_repo
     random_init_backbone: bool = False  # True -> build from config w/o downloading weights (tests/CI)
 
+    # ---------------- multistage pipeline ------------
+    # Mirrors omni-dreams' 3-stage recipe. The two mid-training stages are
+    # independent (both start from the base backbone) and run as parallel jobs;
+    # self-forcing then loads both. ``stage`` selects the trainer/entry behavior:
+    #   "student_init" -- L2a: causal (block-causal) flow-matching mid-training
+    #                     -> initializes the self-forcing generator.
+    #   "teacher"      -- L1b: bidirectional flow-matching mid-training
+    #                     -> initializes the self-forcing real-score teacher + critic.
+    #   "self_forcing" -- L0: few-step DMD distillation (loads the two above).
+    stage: str = "self_forcing"
+    # Mid-training (L2a/L1b) AdamW knobs -- omni-dreams causal/teacher configs.
+    midtrain_lr: float = 3e-5
+    midtrain_weight_decay: float = 1e-3
+    midtrain_grad_clip: float = 0.1
+
     # ---------------- training infra -----------------
     learning_rate: float = 6e-6         # generator (student) lr
     critic_learning_rate: float = 6e-6  # DMD fake-score / critic lr
+    # AdamW betas + weight decay for the self-forcing (L0) optimizers. omni-dreams
+    # uses betas=(0.0, 0.999) (no first-moment momentum) and wd 1e-2 for both the
+    # generator and critic; max_grad_norm=10 there too.
+    adam_betas: tuple[float, float] = (0.9, 0.999)
+    weight_decay: float = 0.0
     gradient_accumulation_steps: int = 1
     mixed_precision: str = "bf16"
     # Shard the generator/critic/teacher + optimizer states across GPUs with FSDP2
@@ -187,6 +207,12 @@ class ARWMArgs:
     # float32 (stable AdamW master weights) and let ``mixed_precision`` drive the
     # bf16 autocast compute; for a quick smoke bf16 everywhere is fine.
     dtype: torch.dtype = torch.bfloat16
+
+    @property
+    def stage_is_causal(self) -> bool:
+        """Mid-training attention pattern: student-init is block-causal, teacher
+        is bidirectional. (Self-forcing handles its own per-model masking.)"""
+        return self.stage != "teacher"
 
     @property
     def autocast_dtype(self) -> "torch.dtype | None":

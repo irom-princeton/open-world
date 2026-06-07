@@ -131,14 +131,17 @@ class DummyDiT(DiTBackbone):
         return _sincos_1d(frame_idx, self.dim) + _sincos_1d(spatial + 1000, self.dim)
 
     # -- forward modes ---------------------------------------------------
-    def forward_train(self, latents, timestep, cond, *, frames_per_block, window=None):
+    def forward_train(self, latents, timestep, cond, *, frames_per_block, window=None, causal=True):
         B, Fr, C, H, W = latents.shape
         tok, shp = self._patchify(latents)
         tpf = shp[1] * shp[2]
         tok = tok + self._pos(Fr, tpf, 0, latents.device)[None]
         temb = self._t_emb(timestep, B, latents.device)
-        bids = block_ids_for_video(Fr, tpf, frames_per_block, device=latents.device)
-        ctx = CausalContext(mode="train", dense_mask=dense_block_causal_mask(bids, bids, window=window))
+        if causal:
+            bids = block_ids_for_video(Fr, tpf, frames_per_block, device=latents.device)
+            ctx = CausalContext(mode="train", dense_mask=dense_block_causal_mask(bids, bids, window=window))
+        else:
+            ctx = CausalContext(mode="off")     # full bidirectional attention (teacher)
         for i, blk in enumerate(self.blocks):
             tok = blk(tok, temb, cond, layer_idx=i, ctx=ctx)
         return self._unpatchify(tok, shp, C)

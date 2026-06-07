@@ -182,6 +182,17 @@ def _restore_train_state(path, gen, critic, opt_g, opt_c, distributed: bool) -> 
     return int(state["global_step"])
 
 
+def _backbone_state_from_ckpt(sd: dict) -> dict:
+    """Pure-backbone weights from a checkpoint that may be a full ARWorldModel
+    state dict. The mid-training stages save ARWorldModel checkpoints (keys
+    ``backbone.*`` + ``conditioner.*``), but the L0 teacher/critic are bare
+    backbones (keys ``transformer.*``). Strip the ``backbone.`` prefix and drop
+    the conditioner; pass through unchanged if the dict is already bare."""
+    if any(k.startswith("backbone.") for k in sd):
+        return {k[len("backbone."):]: v for k, v in sd.items() if k.startswith("backbone.")}
+    return sd
+
+
 def _load_config(config_arg: str | None) -> ARWMArgs:
     if config_arg is None:
         return ARWMArgs()
@@ -362,13 +373,20 @@ def main(args: ARWMArgs) -> None:
         project_dir=args.output_dir,
     )
     gen, critic, teacher = build_training_stack(args)
-    # student-init (E1) / teacher (E2) weights, if provided.
+    # Stage init: generator <- L2a student-init (full ARWorldModel), teacher +
+    # critic <- L1b teacher (backbone weights only; they are bare backbones).
     if args.student_init_ckpt:
-        gen.load_state_dict(torch.load(args.student_init_ckpt, map_location="cpu"), strict=False)
+        sd = torch.load(args.student_init_ckpt, map_location="cpu", weights_only=False)
+        m, u = gen.load_state_dict(sd, strict=False)
+        logger.info(f"loaded generator from L2a {args.student_init_ckpt} "
+                    f"(missing {len(m)}, unexpected {len(u)})")
     if args.teacher_ckpt:
-        sd = torch.load(args.teacher_ckpt, map_location="cpu")
-        teacher.load_state_dict(sd, strict=False)
-        critic.load_state_dict(sd, strict=False)  # critic init from teacher
+        sd = torch.load(args.teacher_ckpt, map_location="cpu", weights_only=False)
+        bb = _backbone_state_from_ckpt(sd)
+        mt, ut = teacher.load_state_dict(bb, strict=False)
+        critic.load_state_dict(bb, strict=False)  # critic init from teacher (L1b)
+        logger.info(f"loaded teacher+critic backbone from L1b {args.teacher_ckpt} "
+                    f"(missing {len(mt)}, unexpected {len(ut)})")
 
     # Params/grads/optimizer stay in args.dtype (fp32 master for real runs); the
     # backbone's bf16 autocast (cfg.autocast_dtype, driven by mixed_precision) does
@@ -386,6 +404,7 @@ def main(args: ARWMArgs) -> None:
         gen_lr=args.learning_rate, critic_lr=args.critic_learning_rate,
         critic_steps=args.critic_steps_per_gen_step, real_cfg=args.real_guidance_scale,
         dmd_lo=args.dmd_min_step_ratio, dmd_hi=args.dmd_max_step_ratio,
+        betas=args.adam_betas, weight_decay=args.weight_decay, max_grad_norm=args.max_grad_norm,
     )
 
     # --- data ---------------------------------------------------------------

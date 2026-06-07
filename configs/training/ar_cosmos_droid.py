@@ -46,18 +46,24 @@ def get_args() -> ARWMArgs:
         frames_per_block=2,
         num_history_blocks=2,
         rollout_blocks=8,
-        # few-step student + distillation (OmniDreams Cosmos2 defaults)
+        # Stage L0: few-step DMD distillation (omni-dreams Cosmos2 self-forcing
+        # recipe): 4-step schedule, gen lr 2e-6 / critic lr 4e-7, betas (0, 0.999),
+        # wd 1e-2, grad-clip 10, real-CFG 3.0, ~10k steps. Initializes from the two
+        # mid-training stages -- run those first (ar_cosmos_{studentinit,teacher}_droid.py).
         denoising_step_list=(1000, 750, 500, 250),
         warp_denoising_step=True,
         critic_steps_per_gen_step=5,
-        real_guidance_scale=3.5,
-        student_init_ckpt=None,
-        teacher_ckpt=None,
-        learning_rate=6e-6,
-        critic_learning_rate=6e-6,
+        real_guidance_scale=3.0,
+        student_init_ckpt="checkpoints/ar_wm/ar_cosmos_studentinit/checkpoint-40000.pt",
+        teacher_ckpt="checkpoints/ar_wm/ar_cosmos_teacher/checkpoint-40000.pt",
+        learning_rate=2e-6,
+        critic_learning_rate=4e-7,
+        adam_betas=(0.0, 0.999),
+        weight_decay=1e-2,
+        max_grad_norm=10.0,
         # fp32 master weights + bf16 autocast compute (see docs/AUTOREGRESSIVE.md "Dtype").
         dtype=torch.float32,
         mixed_precision="bf16",
         train_batch_size=1,
-        max_train_steps=200_000,
+        max_train_steps=10_000,
     )
