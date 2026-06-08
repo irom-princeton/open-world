@@ -27,18 +27,31 @@ ScoreFn = Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
 
 
 def make_cfg_score_fn(
-    backbone, *, frames_per_block: int, null_cond: torch.Tensor | None = None, scale: float = 1.0
+    backbone, *, frames_per_block: int, null_cond: torch.Tensor | None = None,
+    scale: float = 1.0, causal: bool = False,
 ) -> ScoreFn:
-    """Wrap a backbone's ``forward_train`` as a (CFG'd) velocity score function."""
+    """Wrap a backbone's ``forward_train`` as a (CFG'd) velocity score function.
+
+    ``causal=False`` (the default) is correct for the DMD real/fake scores: both
+    are *bidirectional* models (the L1b teacher and the critic initialised from
+    it), scored on the full clip at a single uniform noise level. This mirrors
+    omni-dreams' self-forcing DMD, where the score nets run with
+    ``num_frame_per_block = state_t`` (one block = whole clip -> bidirectional)
+    and ``uniform_timestep=True``; only the *generator* rollout is block-causal.
+    Passing ``causal=True`` here (the old default via ``forward_train``) scored
+    the bidirectional teacher under a block-causal mask it was never trained with.
+    """
 
     def score_fn(x_sigma, timestep, cond):
         # Cast scores to fp32: under bf16 autocast the backbone returns bf16, but
         # the DMD score difference (x0_fake - x0_real) and the CFG combination
         # difference two large, similar tensors — keep that arithmetic in fp32.
-        v_cond = backbone.forward_train(x_sigma, timestep, cond, frames_per_block=frames_per_block).float()
+        v_cond = backbone.forward_train(
+            x_sigma, timestep, cond, frames_per_block=frames_per_block, causal=causal).float()
         if scale == 1.0 or null_cond is None:
             return v_cond
-        v_uncond = backbone.forward_train(x_sigma, timestep, null_cond, frames_per_block=frames_per_block).float()
+        v_uncond = backbone.forward_train(
+            x_sigma, timestep, null_cond, frames_per_block=frames_per_block, causal=causal).float()
         return v_uncond + scale * (v_cond - v_uncond)
 
     return score_fn

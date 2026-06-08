@@ -144,8 +144,11 @@ class SelfForcingTrainer:
             torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
 
     def _score_fns(self, null_cond):
-        real = make_cfg_score_fn(self.teacher, frames_per_block=self.fpb, null_cond=null_cond, scale=self.real_cfg)
-        fake = make_cfg_score_fn(self.critic, frames_per_block=self.fpb)
+        # Both scores are bidirectional (teacher + critic-from-teacher), evaluated
+        # on the full clip at a single uniform noise level -> causal=False.
+        real = make_cfg_score_fn(self.teacher, frames_per_block=self.fpb,
+                                 null_cond=null_cond, scale=self.real_cfg, causal=False)
+        fake = make_cfg_score_fn(self.critic, frames_per_block=self.fpb, causal=False)
         return real, fake
 
     def _rollout(self, cond, num_blocks, latent_block_shape, history_blocks, last_step_grad):
