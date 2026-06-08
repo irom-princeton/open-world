@@ -24,6 +24,10 @@ import torch
 # text/condition width the backbone's cross-attention expects (T5/UMT5 width);
 # the action encoder projects 1024 -> cross_attn_dim.
 # ---------------------------------------------------------------------------
+# Valid `action_cond_mode` values (see ARWMArgs.action_cond_mode).
+ACTION_COND_MODES = ("cross_attn", "cross_attn_pe", "cross_attn_aligned", "adaln")
+
+
 BACKBONE_PRESETS: dict[str, dict] = {
     "wan_1_3b": {
         "hf_repo": "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
@@ -192,6 +196,21 @@ class ARWMArgs:
     text_cond: bool = True
     frame_level_cond: bool = True
 
+    # How the per-frame action condition is injected (see conditioning/action.py
+    # and backbones/wan.py). All modes share the same `[B, Lf, cross_attn_dim]`
+    # cond tensor; they differ only in how the backbone consumes it:
+    #   "cross_attn"         -> Wan text cross-attn, global & unordered (baseline).
+    #   "cross_attn_pe"      -> + a learned temporal PE on the action tokens.
+    #   "cross_attn_aligned" -> per-frame cross-attn: latent frame f attends ONLY
+    #                           to action token f (block-diagonal mask / per-block
+    #                           slice in rollout). Strongest action->frame binding.
+    #   "adaln"              -> action drops the cross-attn entirely and modulates
+    #                           the per-frame AdaLN time-embedding instead.
+    # Only the Wan backbone implements the non-baseline modes; dummy/cosmos/svd
+    # support "cross_attn" only. The student (L2a) and teacher (L1b) must use the
+    # same mode (self-forcing feeds the generator's cond to the teacher/critic).
+    action_cond_mode: str = "cross_attn"
+
     # ---------------- self-forcing / DMD -------------
     # Few-step student denoising schedule (flow-matching timesteps in [0,1000]).
     # Matches OmniDreams' `denoising_step_list = [1000, 750, 500, 250]`; the
@@ -235,6 +254,11 @@ class ARWMArgs:
         if self.backbone not in BACKBONE_PRESETS:
             raise ValueError(
                 f"Unknown backbone {self.backbone!r}; choose from {list(BACKBONE_PRESETS)}"
+            )
+        if self.action_cond_mode not in ACTION_COND_MODES:
+            raise ValueError(
+                f"Unknown action_cond_mode {self.action_cond_mode!r}; "
+                f"choose from {list(ACTION_COND_MODES)}"
             )
         preset = BACKBONE_PRESETS[self.backbone]
         self.preset = preset

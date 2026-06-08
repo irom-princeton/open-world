@@ -53,10 +53,20 @@ def _condition_embedder_forward(self, timestep, encoder_hidden_states, encoder_h
     if timestep.dtype != time_embedder_dtype and time_embedder_dtype != torch.int8:
         timestep = timestep.to(time_embedder_dtype)
     temb = self.time_embedder(timestep).type_as(encoder_hidden_states)     # [N, dim]
-    timestep_proj = self.time_proj(self.act_fn(temb))                      # [N, proj]
     if perframe:
         temb = temb.unflatten(0, (B, T))                # [B, T, dim]
-        timestep_proj = timestep_proj.unflatten(0, (B, T))  # [B, T, proj]
+    # adaln action conditioning ("adaln" mode): add the per-frame action
+    # embedding to the time embedding *before* the projection, so it modulates
+    # every block's (shift, scale, gate) and the final norm. The backbone stashes
+    # ``_action_emb`` [B, T, dim] and guarantees a per-frame timestep here; it is
+    # None (default) for every other mode, leaving the stock path bit-identical.
+    # (Reshaping temb to [B, T, dim] before the projection is mathematically the
+    # same as projecting flat then reshaping -- time_proj acts on the last dim.)
+    action_emb = getattr(self, "_action_emb", None)
+    if action_emb is not None:
+        assert perframe, "adaln action conditioning requires a per-frame timestep"
+        temb = temb + action_emb.type_as(temb)          # [B, T, dim]
+    timestep_proj = self.time_proj(self.act_fn(temb))   # [N, proj] or [B, T, proj]
     encoder_hidden_states = self.text_embedder(encoder_hidden_states)
     if encoder_hidden_states_image is not None:
         encoder_hidden_states_image = self.image_embedder(encoder_hidden_states_image)

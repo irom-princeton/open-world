@@ -51,6 +51,32 @@ def dense_block_causal_mask(
     return allowed
 
 
+def frame_aligned_cross_mask(
+    num_q_frames: int,
+    tokens_per_frame: int,
+    num_kv_frames: int,
+    *,
+    frame_repeat: int = 1,
+    device: torch.device | str = "cpu",
+) -> torch.Tensor:
+    """Per-frame *cross*-attention mask ``[num_q_frames*tpf, num_kv_frames]``.
+
+    Used by ``action_cond_mode="cross_attn_aligned"``: a latent query token in
+    frame ``qf`` may attend to action token ``k`` iff ``k`` is that frame's own
+    action, i.e. ``qf // frame_repeat == k``. ``frame_repeat`` is the number of
+    packed latent frames per real (action) frame: 1 for ``height_stack`` (views
+    folded into H, so ``num_q_frames == num_kv_frames``) and ``num_cams`` for the
+    time-major ``sequence_pack`` layout (each real frame expands to V packed
+    frames ``t0v0, t0v1, ...``). ``True`` = attend.
+    """
+    if num_q_frames % frame_repeat != 0:
+        raise ValueError(f"num_q_frames {num_q_frames} not divisible by frame_repeat {frame_repeat}")
+    real_of_q = (torch.arange(num_q_frames, device=device) // frame_repeat)  # [num_q_frames]
+    real_of_q = real_of_q.repeat_interleave(tokens_per_frame).view(-1, 1)    # [Sq, 1]
+    kv = torch.arange(num_kv_frames, device=device).view(1, -1)              # [1, Lkv]
+    return real_of_q == kv
+
+
 def make_flex_block_causal_mask(
     block_ids: torch.Tensor,
     *,

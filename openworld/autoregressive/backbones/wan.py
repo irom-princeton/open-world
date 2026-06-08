@@ -24,10 +24,10 @@ import contextlib
 import torch
 
 from .base import DiTBackbone
-from ._attn import attach_block_causal
+from ._attn import attach_block_causal, attach_cross_align
 from ..causal.context import CausalContext
 from ..causal.kv_cache import KVCache
-from ..causal.mask import block_ids_for_video, dense_block_causal_mask
+from ..causal.mask import block_ids_for_video, dense_block_causal_mask, frame_aligned_cross_mask
 
 
 def _offset_rope(rope, hidden_states: torch.Tensor, frame_offset: int) -> torch.Tensor:
@@ -46,7 +46,8 @@ def _offset_rope(rope, hidden_states: torch.Tensor, frame_offset: int) -> torch.
 
 
 class WanBackbone(DiTBackbone):
-    def __init__(self, transformer, *, cross_attn_dim: int):
+    def __init__(self, transformer, *, cross_attn_dim: int,
+                 action_mode: str = "cross_attn", action_frame_repeat: int = 1):
         super().__init__()
         self.transformer = transformer
         self.in_channels = transformer.config.in_channels
@@ -62,17 +63,34 @@ class WanBackbone(DiTBackbone):
         from .wan_perframe import patch_for_perframe_timestep
         patch_for_perframe_timestep(transformer)
 
+        # -- action-conditioning mode (see config.ARWMArgs.action_cond_mode) ----
+        self.action_mode = action_mode
+        # packed latent frames per real (action) frame: 1 for height_stack, V for
+        # the time-major sequence_pack layout. Drives the per-frame alignment.
+        self.action_frame_repeat = action_frame_repeat
+        if action_mode == "cross_attn_aligned":
+            # per-frame cross-attn -> patch attn2 to honour ctx.cross_mask.
+            attach_cross_align(transformer, self.context)
+        elif action_mode == "adaln":
+            # project the per-frame action token into the model dim and add it to
+            # the AdaLN time embedding (consumed in wan_perframe._condition_embedder_forward).
+            inner_dim = transformer.config.num_attention_heads * transformer.config.attention_head_dim
+            self.action_to_temb = torch.nn.Linear(cross_attn_dim, inner_dim)
+
     # -- constructors ----------------------------------------------------
     @classmethod
-    def from_pretrained(cls, repo_or_path: str, *, cross_attn_dim: int, torch_dtype=torch.bfloat16):
+    def from_pretrained(cls, repo_or_path: str, *, cross_attn_dim: int, torch_dtype=torch.bfloat16,
+                        action_mode: str = "cross_attn", action_frame_repeat: int = 1):
         from diffusers import WanTransformer3DModel
         tf = WanTransformer3DModel.from_pretrained(
             repo_or_path, subfolder="transformer", torch_dtype=torch_dtype
         )
-        return cls(tf, cross_attn_dim=cross_attn_dim)
+        return cls(tf, cross_attn_dim=cross_attn_dim,
+                   action_mode=action_mode, action_frame_repeat=action_frame_repeat)
 
     @classmethod
-    def random_init(cls, *, cross_attn_dim: int = 4096, small: bool = True):
+    def random_init(cls, *, cross_attn_dim: int = 4096, small: bool = True,
+                    action_mode: str = "cross_attn", action_frame_repeat: int = 1):
         """Build an untrained Wan transformer. ``small`` shrinks it so CPU/CI can
         instantiate it; drop ``small`` to match the real 1.3B shape."""
         from diffusers import WanTransformer3DModel
@@ -88,7 +106,8 @@ class WanBackbone(DiTBackbone):
                 in_channels=16, out_channels=16, text_dim=cross_attn_dim, freq_dim=256,
                 ffn_dim=8960, num_layers=30, rope_max_seq_len=1024,
             )
-        return cls(tf, cross_attn_dim=cross_attn_dim)
+        return cls(tf, cross_attn_dim=cross_attn_dim,
+                   action_mode=action_mode, action_frame_repeat=action_frame_repeat)
 
     # -- helpers ---------------------------------------------------------
     @staticmethod
@@ -116,6 +135,63 @@ class WanBackbone(DiTBackbone):
             )
         return out[0] if isinstance(out, (tuple, list)) else out
 
+    # -- action conditioning ---------------------------------------------
+    @staticmethod
+    def _as_perframe_timestep(timestep, *, B, Fr):
+        """Coerce a scalar/[B] timestep to per-frame [B, Fr] (all-equal). The
+        per-frame Wan path is numerically identical to the global one when the
+        frames share a timestep, so this only *enables* the AdaLN modulation
+        path; it does not change the denoising level."""
+        if timestep.ndim == 2:
+            return timestep
+        t = timestep.reshape(-1)
+        if t.numel() == 1:
+            t = t.expand(B)
+        return t[:, None].expand(B, Fr).contiguous()
+
+    def _prep_action(self, cond, *, Fr, tpf, timestep):
+        """Mode-specific prep for one forward. ``cond`` is the action tensor for
+        THIS forward (already sliced to the block in the cached path). Returns
+        ``(cross_attn_context, timestep)`` and, as side effects, sets
+        ``ctx.cross_mask`` (aligned) / stashes ``_action_emb`` (adaln)."""
+        ce = self.transformer.condition_embedder
+        ce._action_emb = None
+        self.context.cross_mask = None
+        mode = self.action_mode
+        if mode in ("cross_attn", "cross_attn_pe"):
+            return cond, timestep                       # global cross-attn (baseline / +PE)
+        rep = self.action_frame_repeat
+        Lkv = cond.shape[1]
+        if mode == "cross_attn_aligned":
+            self.context.cross_mask = frame_aligned_cross_mask(
+                Fr, tpf, Lkv, frame_repeat=rep, device=cond.device)
+            return cond, timestep
+        if mode == "adaln":
+            amod = self.action_to_temb(cond)            # [B, Lkv, dim]
+            if rep != 1:
+                amod = amod.repeat_interleave(rep, dim=1)
+            if amod.shape[1] != Fr:
+                raise ValueError(f"adaln action frames {amod.shape[1]} != latent frames {Fr} "
+                                 f"(check action_frame_repeat / cond slicing)")
+            ce._action_emb = amod
+            timestep = self._as_perframe_timestep(timestep, B=cond.shape[0], Fr=Fr)
+            # action goes solely through AdaLN -> feed a null cross-attn context.
+            return cond.new_zeros(cond.shape[0], 1, self.cross_attn_dim), timestep
+        raise ValueError(f"unknown action_mode {mode!r}")
+
+    def _clear_action(self):
+        self.transformer.condition_embedder._action_emb = None
+        self.context.cross_mask = None
+
+    def _block_action_slice(self, cond, start_frame, Fr):
+        """Slice the full action sequence to the real frames covered by a cached
+        block (aligned / adaln only; the global modes feed the full cond)."""
+        if self.action_mode not in ("cross_attn_aligned", "adaln"):
+            return cond
+        rep = self.action_frame_repeat
+        lo, hi = start_frame // rep, (start_frame + Fr) // rep
+        return cond[:, lo:hi]
+
     # -- forward modes ---------------------------------------------------
     def forward_train(self, latents, timestep, cond, *, frames_per_block, window=None, causal=True):
         B, Fr, C, H, W = latents.shape
@@ -128,16 +204,23 @@ class WanBackbone(DiTBackbone):
         else:
             ctx.mode = "off"            # full bidirectional attention (teacher mid-training)
             ctx.dense_mask = None
-        x = self._call(self._to_cfhw(latents), timestep, cond)
-        ctx.mode = "off"
+        cond, timestep = self._prep_action(cond, Fr=Fr, tpf=tpf, timestep=timestep)
+        try:
+            x = self._call(self._to_cfhw(latents), timestep, cond)
+        finally:
+            ctx.mode = "off"
+            self._clear_action()
         return self._to_fchw(x)
 
     def forward_cached(self, latent_block, timestep, cond, *, kv_cache: KVCache, start_frame, commit=True):
         B, Fr, C, H, W = latent_block.shape
+        tpf = (H // self.patch_spatial) * (W // self.patch_spatial)
         ctx = self.context
         ctx.mode = "cache"
         ctx.kv_cache = kv_cache
         ctx.commit = commit
+        cond = self._block_action_slice(cond, start_frame, Fr)
+        cond, timestep = self._prep_action(cond, Fr=Fr, tpf=tpf, timestep=timestep)
         # offset RoPE to absolute frame positions for this block.
         rope = self.transformer.rope
         orig_forward = rope.forward
@@ -147,4 +230,5 @@ class WanBackbone(DiTBackbone):
         finally:
             rope.forward = orig_forward  # type: ignore[assignment]
             ctx.mode = "off"
+            self._clear_action()
         return self._to_fchw(x)

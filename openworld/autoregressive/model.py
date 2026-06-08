@@ -35,6 +35,7 @@ class ARWorldModel(nn.Module):
             action_dim=cfg.action_dim,
             cross_attn_dim=cfg.cross_attn_dim,
             text_cond=cfg.text_cond,
+            mode=cfg.action_cond_mode,
         )
         self.packer = ViewPacker(cfg.multiview_layout, cfg.num_cams)
         self.view_embed = (

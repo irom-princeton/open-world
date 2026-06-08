@@ -19,6 +19,11 @@ import torch.nn as nn
 from vidwm.action_encoders.unaligned_action_encoder import ActionEncoderUnaligned
 
 
+# Cap for the learned temporal positional-embedding table (cross_attn_pe mode).
+# Matches Wan's rope_max_seq_len; clips are far shorter than this.
+_MAX_ACTION_FRAMES = 1024
+
+
 class ActionConditioner(nn.Module):
     def __init__(
         self,
@@ -28,6 +33,7 @@ class ActionConditioner(nn.Module):
         hidden_dim: int = 1024,
         text_cond: bool = True,
         cfg_dropout: float = 0.05,
+        mode: str = "cross_attn",
     ):
         super().__init__()
         self.encoder = ActionEncoderUnaligned(
@@ -36,6 +42,16 @@ class ActionConditioner(nn.Module):
         self.proj = nn.Linear(hidden_dim, cross_attn_dim)
         self.cfg_dropout = cfg_dropout
         self.cross_attn_dim = cross_attn_dim
+        self.mode = mode
+        # Learned temporal PE on the per-frame action tokens (Fix 1). Only
+        # "cross_attn_pe" reads it; zero-init so it starts as a no-op and the
+        # other modes are unaffected. The strictly-aligned/adaln modes need no PE
+        # (each frame already maps to exactly one action token).
+        self.temporal_pe = (
+            nn.Parameter(torch.zeros(_MAX_ACTION_FRAMES, hidden_dim))
+            if mode == "cross_attn_pe"
+            else None
+        )
 
     def forward(
         self,
@@ -57,7 +73,13 @@ class ActionConditioner(nn.Module):
             actions, texts=texts, text_tokenizer=tokenizer, text_encoder=text_encoder,
             frame_level_cond=frame_level_cond, device=actions.device,
         )
-        cond = self.proj(out["action_with_text_embeds"])
+        emb = out["action_with_text_embeds"]                # [B, L, hidden]
+        if self.temporal_pe is not None:
+            L = emb.shape[1]
+            if L > self.temporal_pe.shape[0]:
+                raise ValueError(f"action length {L} exceeds temporal_pe cap {self.temporal_pe.shape[0]}")
+            emb = emb + self.temporal_pe[:L].to(emb.dtype)
+        cond = self.proj(emb)
         do_drop = self.training if cfg_drop is None else cfg_drop
         if do_drop and self.cfg_dropout > 0:
             keep = (torch.rand(cond.shape[0], device=cond.device) > self.cfg_dropout)

@@ -15,6 +15,7 @@ action+text condition and there is nothing causal to enforce.
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 
 from ..causal.attention import causal_sdpa
 from ..causal.context import CausalContext
@@ -53,6 +54,45 @@ class BlockCausalWanAttnProcessor:
             key = apply_rotary_emb(key, rotary_emb)
 
         out = causal_sdpa(self.ctx, query, key, value, self.layer_idx)
+        out = out.transpose(1, 2).flatten(2, 3).type_as(query)
+        out = attn.to_out[0](out)
+        out = attn.to_out[1](out)
+        return out
+
+
+class AlignedCrossAttnProcessor:
+    """Wan *cross*-attention (``attn2``) with optional per-frame alignment.
+
+    Mirrors the stock ``WanAttnProcessor2_0`` cross-attn math (q from the latent,
+    k/v from the action condition, qk-norm, no RoPE) but applies
+    ``ctx.cross_mask`` — the ``[S_q, L_kv]`` per-frame mask from
+    :func:`frame_aligned_cross_mask` — so latent frame *f* attends only to its own
+    action token. ``cross_mask is None`` -> ordinary global cross-attention,
+    numerically identical to the stock processor (used by the non-aligned modes
+    and the cached-rollout slices that pre-restrict the K/V instead)."""
+
+    def __init__(self, context: CausalContext):
+        self.ctx = context
+
+    def __call__(self, attn, hidden_states, encoder_hidden_states=None,
+                 attention_mask=None, rotary_emb=None):
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+        query = attn.to_q(hidden_states)
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+        if attn.norm_q is not None:
+            query = attn.norm_q(query)
+        if attn.norm_k is not None:
+            key = attn.norm_k(key)
+        query = query.unflatten(2, (attn.heads, -1)).transpose(1, 2)
+        key = key.unflatten(2, (attn.heads, -1)).transpose(1, 2)
+        value = value.unflatten(2, (attn.heads, -1)).transpose(1, 2)
+
+        mask = self.ctx.cross_mask
+        if mask is not None:
+            mask = mask.to(query.device)
+        out = F.scaled_dot_product_attention(query, key, value, attn_mask=mask)
         out = out.transpose(1, 2).flatten(2, 3).type_as(query)
         out = attn.to_out[0](out)
         out = attn.to_out[1](out)
@@ -109,6 +149,19 @@ def _attach(transformer, context: CausalContext, block_cls_name: str, proc_cls) 
 def attach_block_causal(transformer, context: CausalContext) -> CausalContext:
     """Patch every Wan self-attention layer (``attn1``) in place."""
     return _attach(transformer, context, "WanTransformerBlock", BlockCausalWanAttnProcessor)
+
+
+def attach_cross_align(transformer, context: CausalContext) -> None:
+    """Patch every Wan *cross*-attention layer (``attn2``) with the per-frame
+    :class:`AlignedCrossAttnProcessor` (reads ``context.cross_mask``). Used only
+    by ``action_cond_mode="cross_attn_aligned"``."""
+    n = 0
+    for module in transformer.modules():
+        if module.__class__.__name__ == "WanTransformerBlock":
+            module.attn2.processor = AlignedCrossAttnProcessor(context)
+            n += 1
+    if n == 0:
+        raise RuntimeError("no WanTransformerBlock found in transformer")
 
 
 def attach_block_causal_cosmos(transformer, context: CausalContext) -> CausalContext:

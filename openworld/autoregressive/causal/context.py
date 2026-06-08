@@ -25,3 +25,8 @@ class CausalContext:
     kv_cache: KVCache | None = None         # cache mode
     commit: bool = True                     # cache mode: persist this block's K/V?
     num_self_layers: int = 0                # set by attach_block_causal*
+    # Per-frame action alignment ("cross_attn_aligned"): a [S_q, L_kv] bool mask
+    # applied in *cross*-attention (attn2) so latent frame f attends only to its
+    # own action token. ``None`` -> unmasked (global) cross-attention. Read by the
+    # AlignedCrossAttnProcessor; set per-forward by the backbone.
+    cross_mask: torch.Tensor | None = None

@@ -24,6 +24,12 @@ def _dummy(layers=3, dim=48, C=16, cross=32):
     return DummyDiT(in_channels=C, dim=dim, heads=4, layers=layers, cross_attn_dim=cross).eval()
 
 
+def _wan(mode="cross_attn", cross=64):
+    """Tiny real Wan DiT (random init, 2 layers) in a given action_cond_mode."""
+    from openworld.autoregressive.backbones.wan import WanBackbone
+    return WanBackbone.random_init(cross_attn_dim=cross, small=True, action_mode=mode).eval().float()
+
+
 def test_kv_cache_matches_masked_forward():
     torch.manual_seed(0)
     C, H, W, fpb, nblocks = 16, 8, 8, 2, 4
@@ -326,3 +332,107 @@ def test_autocast_dtype_derivation():
     assert fp32_bf16.autocast_dtype == torch.bfloat16          # fp32 master + bf16 compute
     assert ARWMArgs(backbone="dummy", dtype=torch.bfloat16, mixed_precision="bf16").autocast_dtype is None
     assert ARWMArgs(backbone="dummy", dtype=torch.float32, mixed_precision="no").autocast_dtype is None
+
+
+# ---------------------------------------------------------------------------
+# action_cond_mode: the four action-conditioning modes (see config.ARWMArgs and
+# backbones/wan.py). Exercised on a tiny real Wan DiT on CPU.
+# ---------------------------------------------------------------------------
+_ACTION_MODES = ["cross_attn", "cross_attn_pe", "cross_attn_aligned", "adaln"]
+
+
+@pytest.mark.parametrize("mode", _ACTION_MODES)
+def test_wan_action_mode_rollout_matches_masked(mode):
+    """The KV-cache rollout reproduces the masked forward for *every* action mode
+    — i.e. the per-frame aligned mask / adaln modulation / per-block cond slice
+    stay consistent between training and the autoregressive rollout."""
+    torch.manual_seed(0)
+    C, H, W, fpb, nblocks = 16, 8, 8, 2, 4
+    bb = _wan(mode)
+    x = torch.randn(1, fpb * nblocks, C, H, W)
+    cond = torch.randn(1, fpb * nblocks, bb.cross_attn_dim)
+    t = torch.zeros(1)
+    with torch.no_grad():
+        full = bb.forward_train(x, t, cond, frames_per_block=fpb, causal=True)
+        cache = bb.make_kv_cache()
+        rolled = torch.cat([
+            bb.forward_cached(x[:, b*fpb:(b+1)*fpb], t, cond, kv_cache=cache, start_frame=b*fpb)
+            for b in range(nblocks)
+        ], dim=1)
+    assert full.shape == x.shape
+    assert (full - rolled).abs().max().item() < 1e-4
+
+
+def test_wan_aligned_binds_action_to_its_own_frame():
+    """cross_attn_aligned: swapping the actions of frames 2 and 3 changes ONLY
+    those frames' outputs; the baseline cross_attn (a positionally-unordered bag)
+    is unchanged by the same swap — the exact controllability failure this fixes."""
+    torch.manual_seed(0)
+    C, H, W, F, fpb = 16, 8, 8, 4, 2
+    x = torch.randn(1, F, C, H, W)
+    t = torch.full((1,), 500.0)
+    cond = torch.randn(1, F, 64)
+    swapped = cond.clone()
+    swapped[:, [2, 3]] = cond[:, [3, 2]]
+
+    aligned = _wan("cross_attn_aligned")
+    with torch.no_grad():
+        a = aligned.forward_train(x, t, cond, frames_per_block=fpb, causal=True)
+        b = aligned.forward_train(x, t, swapped, frames_per_block=fpb, causal=True)
+    per_frame = (a - b).abs().flatten(2).amax(-1)[0]
+    assert per_frame[0] < 1e-5 and per_frame[1] < 1e-5      # frames 0,1 untouched
+    assert per_frame[2] > 1e-3 and per_frame[3] > 1e-3      # frames 2,3 bound to swapped actions
+
+    base = _wan("cross_attn")
+    with torch.no_grad():
+        a = base.forward_train(x, t, cond, frames_per_block=fpb, causal=True)
+        b = base.forward_train(x, t, swapped, frames_per_block=fpb, causal=True)
+    assert (a - b).abs().max().item() < 1e-5               # bag of actions: permutation-invariant
+
+
+def test_wan_adaln_is_cfg_consistent_and_active():
+    """adaln: a zero condition is the deterministic unconditional forward (so CFG's
+    null branch is exact), and a non-zero action actually changes the output (the
+    AdaLN modulation path is wired)."""
+    torch.manual_seed(0)
+    C, H, W, F = 16, 8, 8, 4
+    bb = _wan("adaln")
+    x = torch.randn(1, F, C, H, W)
+    t = torch.full((1,), 500.0)
+    cond = torch.randn(1, F, 64)
+    zero = torch.zeros(1, F, 64)
+    with torch.no_grad():
+        out_action = bb.forward_train(x, t, cond, frames_per_block=2, causal=True)
+        out_null_1 = bb.forward_train(x, t, zero, frames_per_block=2, causal=True)
+        out_null_2 = bb.forward_train(x, t, zero, frames_per_block=2, causal=True)
+    assert (out_null_1 - out_null_2).abs().max().item() < 1e-6   # deterministic null branch
+    assert (out_action - out_null_1).abs().max().item() > 1e-3   # action changes the output
+
+
+def test_conditioner_pe_makes_frames_positional():
+    """cross_attn_pe: with a (trained, non-zero) temporal PE, the *same* action
+    vector at two different frames yields different cond tokens — the positional
+    signal the baseline lacks. The baseline conditioner gives identical tokens."""
+    from openworld.autoregressive.conditioning.action import ActionConditioner
+    torch.manual_seed(0)
+    same = torch.zeros(1, 4, 7)                    # identical action every frame
+    pe = ActionConditioner(action_dim=7, cross_attn_dim=64, mode="cross_attn_pe").eval()
+    with torch.no_grad():
+        pe.temporal_pe.normal_()                   # PE is zero-init; simulate a trained PE
+        cond = pe(same, cfg_drop=False)
+    assert (cond[:, 0] - cond[:, 1]).abs().max().item() > 1e-3   # frames are positionally distinct
+
+    base = ActionConditioner(action_dim=7, cross_attn_dim=64, mode="cross_attn").eval()
+    with torch.no_grad():
+        cond_b = base(same, cfg_drop=False)
+    assert (cond_b[:, 0] - cond_b[:, 1]).abs().max().item() < 1e-6   # identical action -> identical token
+
+
+def test_non_wan_backbone_rejects_nonbaseline_mode():
+    """dummy/cosmos/svd implement only the baseline cross-attn injection; asking
+    for another mode must fail loudly rather than silently ignore the action."""
+    from openworld.autoregressive.backbones import build_backbone
+    from openworld.autoregressive.config import ARWMArgs
+    cfg = ARWMArgs(backbone="dummy", random_init_backbone=True, action_cond_mode="adaln")
+    with pytest.raises(NotImplementedError):
+        build_backbone(cfg)
