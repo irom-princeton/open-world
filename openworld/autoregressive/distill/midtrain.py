@@ -53,14 +53,36 @@ class DiffusionTrainer:
         self.opt = torch.optim.AdamW(
             model.parameters(), lr=lr, weight_decay=weight_decay, betas=betas)
 
+    def _per_block_sigma(self, B: int, Fr: int, device) -> torch.Tensor:
+        """Independent noise level per *block* (diffusion forcing), expanded to a
+        per-frame [B, Fr] grid. Frames are grouped exactly as the block-causal mask
+        groups them (``frame_idx // fpb``), so block b's frames all share its sigma.
+        ``Fr`` is always a multiple of ``fpb`` (the dataset crops to whole blocks)."""
+        nblk = Fr // self.fpb
+        sig_blk = self.sched.random_sigma(
+            B * nblk, device, lo=self.sigma_lo, hi=self.sigma_hi).view(B, nblk)
+        return sig_blk.repeat_interleave(self.fpb, dim=1)            # [B, Fr]
+
     def train_step(self, latents: torch.Tensor, cond) -> dict:
-        """One flow-matching step on a clean clip ``latents`` [B, F, C, H, W]."""
+        """One flow-matching step on a clean clip ``latents`` [B, F, C, H, W].
+
+        * causal (student-init): **diffusion forcing** -- an independent noise
+          level per block, so the model learns to denoise a noisy block given
+          cleaner context (the autoregressive rollout condition).
+        * bidirectional (teacher): one noise level for the whole clip (standard
+          video diffusion; ``consistent_noise``)."""
         x0 = latents
-        B = x0.shape[0]
-        sigma = self.sched.random_sigma(B, x0.device, lo=self.sigma_lo, hi=self.sigma_hi)
+        B, Fr = x0.shape[0], x0.shape[1]
         eps = torch.randn_like(x0)
-        x_sigma = self.sched.add_noise(x0, eps, sigma)
-        t = self.sched.to_timestep(sigma)
+        if self.causal:
+            sigma_f = self._per_block_sigma(B, Fr, x0.device)       # [B, Fr]
+            sig_b = sigma_f.view(B, Fr, *([1] * (x0.ndim - 2))).to(x0.dtype)
+            x_sigma = (1 - sig_b) * x0 + sig_b * eps
+            t = self.sched.to_timestep(sigma_f)                     # [B, Fr] -> per-frame timestep
+        else:
+            sigma = self.sched.random_sigma(B, x0.device, lo=self.sigma_lo, hi=self.sigma_hi)
+            x_sigma = self.sched.add_noise(x0, eps, sigma)
+            t = self.sched.to_timestep(sigma)                       # [B]
         v_pred = self.model.forward_train(
             x_sigma, t, cond, frames_per_block=self.fpb, causal=self.causal)
         v_target = self.sched.velocity_target(x0, eps)

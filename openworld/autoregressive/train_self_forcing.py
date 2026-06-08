@@ -236,6 +236,20 @@ class _SamplePreviewer:
         self._decoder = None
         self._p01 = self._p99 = None
         self._ep_ids: list[str] = []
+        # Mid-training backbones are not distilled, so previewing them at the
+        # few-step ``denoising_step_list`` yields garbage. Sample with a many-step
+        # uniform schedule instead; the self_forcing stage keeps its real list
+        # (scheduler=None -> model.rollout builds it from cfg.denoising_step_list).
+        self._preview_sched = None
+        if getattr(args, "stage", "self_forcing") != "self_forcing":
+            n = max(2, int(args.preview_denoising_steps))
+            ts = args.num_train_timestep
+            steps = tuple(int(round(ts * (i + 1) / n)) for i in reversed(range(n)))  # ~ts..ts/n
+            # warp=False -> uniform sigma grid reaching ~ts/n near the data end
+            # (faithful to the uniform-sigma mid-training; the shift only matters
+            # for the few-step distilled schedule).
+            self._preview_sched = FlowMatchScheduler(
+                steps, num_train_timestep=ts, warp=False)
         if not self.enabled:
             return
         # action stats are needed on ALL ranks (they feed the rollout conditioning)
@@ -297,6 +311,7 @@ class _SamplePreviewer:
                     num_history_blocks=a.sample_history_blocks,
                     in_channels=a.in_channels, device=accelerator.device,
                     dtype=a.dtype, max_blocks=max_blocks,
+                    scheduler=self._preview_sched,
                 )
                 if not self.is_main:
                     continue

@@ -55,6 +55,12 @@ class WanBackbone(DiTBackbone):
         self.patch_temporal = transformer.config.patch_size[0]
         self.context = attach_block_causal(transformer, CausalContext())
         self.num_self_layers = self.context.num_self_layers
+        # Per-frame timestep modulation (diffusion forcing). Composes with the
+        # causal processors above: it overrides block.forward but still routes
+        # self-attention through attn1.processor. A scalar [B] timestep path is
+        # unchanged, so inference (forward_cached, one t per block) is unaffected.
+        from .wan_perframe import patch_for_perframe_timestep
+        patch_for_perframe_timestep(transformer)
 
     # -- constructors ----------------------------------------------------
     @classmethod

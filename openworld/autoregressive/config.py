@@ -144,6 +144,12 @@ class ARWMArgs:
     sample_history_blocks: int = 1    # ground-truth blocks used to prime ("first frame")
     sample_max_blocks: int = 8        # cap generated blocks for a fast preview (0 = to ep end)
     sample_video_fps: int = 8
+    # Denoising steps for the *preview* rollout. A mid-training (student_init/teacher)
+    # backbone is NOT distilled, so the 4-step ``denoising_step_list`` produces a
+    # blurry color-wash; previews must integrate the flow with many steps to be
+    # meaningful. Ignored for the ``self_forcing`` stage (which previews at its real
+    # few-step ``denoising_step_list`` -- that *is* the deployment schedule).
+    preview_denoising_steps: int = 32
     # Wan VAE used to decode 16-ch latents -> RGB (Cosmos latents use it too).
     vae_dir: str = "external/Wan2.1-T2V-1.3B-Diffusers"
 

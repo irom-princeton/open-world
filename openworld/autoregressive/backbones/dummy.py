@@ -60,8 +60,12 @@ class _Layer(nn.Module):
         return x.transpose(1, 2).reshape(B, S, H * hd)
 
     def forward(self, x, temb, cond, *, layer_idx, ctx: CausalContext):
-        shift, scale = self.ada(temb).chunk(2, dim=-1)        # [B, D] each
-        h = self.norm1(x) * (1 + scale[:, None]) + shift[:, None]
+        # temb is [B, D] (global -> broadcast over tokens) or [B, S, D] (per-frame,
+        # already expanded to one embedding per token).
+        shift, scale = self.ada(temb).chunk(2, dim=-1)
+        if shift.ndim == 2:                                   # [B, D] -> [B, 1, D]
+            shift, scale = shift[:, None], scale[:, None]
+        h = self.norm1(x) * (1 + scale) + shift
         q, k, v = self._heads(self.q(h)), self._heads(self.k(h)), self._heads(self.v(h))
         # same dispatch as the real Wan/Cosmos processors
         attn = causal_sdpa(ctx, q, k, v, layer_idx)
@@ -117,11 +121,15 @@ class DummyDiT(DiTBackbone):
         x = x.permute(0, 1, 4, 2, 5, 3, 6).reshape(B, Fr, C, hp * ps, wp * ps)
         return x
 
-    def _t_emb(self, timestep, B, device):
-        t = timestep.float().reshape(-1)[:1] if timestep.numel() == 1 else timestep.float().reshape(-1)
+    def _t_emb(self, timestep, B, Fr, tpf, device):
+        t = timestep.float()
+        if t.ndim == 2:                                  # [B, Fr] per-frame timestep
+            emb = self.t_embed(_sincos_1d(t.reshape(-1), self.dim))   # [B*Fr, dim]
+            return emb.view(B, Fr, self.dim).repeat_interleave(tpf, dim=1)  # [B, Fr*tpf, dim]
+        t = t.reshape(-1)
         if t.numel() == 1:
             t = t.expand(B)
-        return self.t_embed(_sincos_1d(t, self.dim))
+        return self.t_embed(_sincos_1d(t, self.dim))     # [B, dim]
 
     def _pos(self, num_frames, tokens_per_frame, start_frame, device):
         # absolute frame index per token (offset by start_frame in *frame* units)
@@ -136,7 +144,7 @@ class DummyDiT(DiTBackbone):
         tok, shp = self._patchify(latents)
         tpf = shp[1] * shp[2]
         tok = tok + self._pos(Fr, tpf, 0, latents.device)[None]
-        temb = self._t_emb(timestep, B, latents.device)
+        temb = self._t_emb(timestep, B, Fr, tpf, latents.device)
         if causal:
             bids = block_ids_for_video(Fr, tpf, frames_per_block, device=latents.device)
             ctx = CausalContext(mode="train", dense_mask=dense_block_causal_mask(bids, bids, window=window))
@@ -151,7 +159,7 @@ class DummyDiT(DiTBackbone):
         tok, shp = self._patchify(latent_block)
         tpf = shp[1] * shp[2]
         tok = tok + self._pos(Fr, tpf, start_frame, latent_block.device)[None]
-        temb = self._t_emb(timestep, B, latent_block.device)
+        temb = self._t_emb(timestep, B, Fr, tpf, latent_block.device)
         ctx = CausalContext(mode="cache", kv_cache=kv_cache, commit=commit)
         for i, blk in enumerate(self.blocks):
             tok = blk(tok, temb, cond, layer_idx=i, ctx=ctx)
