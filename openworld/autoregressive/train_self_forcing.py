@@ -116,6 +116,17 @@ def _fsdp_shard_models(models, *, enabled: bool) -> bool:
         cond_mod = getattr(m, "conditioner", None)       # generator only; invoked via __call__
         if cond_mod is not None and any(p.requires_grad for p in cond_mod.parameters()):
             fully_shard(cond_mod, mesh=mesh)
+        # adaln action mode adds a small action->time-embedding Linear directly on
+        # the backbone (outside the transformer AND the conditioner). It is invoked
+        # via __call__ (``self.action_to_temb(cond)``), so shard it too -- otherwise
+        # it stays a plain Tensor while every other param is a DTensor, and
+        # clip_grad_norm_ over model.parameters() crashes on the mixed types.
+        # ``backbone`` for the ARWorldModel generator; ``m`` itself for the bare
+        # WanBackbone critic/teacher at L0.
+        bb = getattr(m, "backbone", None) or m
+        a2t = getattr(bb, "action_to_temb", None)
+        if a2t is not None and any(p.requires_grad for p in a2t.parameters()):
+            fully_shard(a2t, mesh=mesh)
     return True
 
 
