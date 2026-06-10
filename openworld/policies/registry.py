@@ -18,7 +18,7 @@ POLICY_REGISTRY: dict[str, BackendSpec] = {
         module_path="openworld.policies.dp_policy",
         class_name="DPPolicy",
         extra_name="policy-dp",
-        required_modules=("av", "gym", "websockets"),
+        required_modules=("gym", "websockets"),
     ),
     "molmoact2": BackendSpec(
         module_path="openworld.policies.molmoact2_policy",

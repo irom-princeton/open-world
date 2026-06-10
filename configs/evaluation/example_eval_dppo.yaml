@@ -27,12 +27,6 @@ policy:
     stacked_view_order: [exterior_left, exterior_right, wrist]
     camera_indices: [0, 1]
     device: cuda
-    # DPPO policies emit joint velocities; integrate to joint positions via
-    # the dynamics adapter, then FK to cartesian for the world model.
-    action_adapter_checkpoint_path: checkpoints/action_adapter/model2_15_9.pth
-    action_adapter_gripper_max: 1.0
-    policy_skip_step: 3
-    num_action_steps: 5
 
 reward_model:
   name: robometer
@@ -42,9 +36,9 @@ reward_model:
     success_threshold: 0.8
 
 scheduler:
-  chunk_size: 5
+  chunk_size: 15
 
 duration: 10
-action_hz: 5
+action_hz: 15
 video_dir: outputs/irom_test_carrot_dppo_videos
 dataset_path: data/benchmark/irom_test_carrot

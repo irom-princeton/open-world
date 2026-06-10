@@ -1,0 +1,49 @@
+world_model:
+  name: ctrlworld
+  checkpoint_path: checkpoints/wm/ctrlworld/checkpoint-10000.pt
+  params:
+    svd_model_path: external/stable-video-diffusion-img2vid
+    clip_model_path: external/clip-vit-base-patch32
+    debug: false
+    debug_log_limit: 3
+    num_frames: 5
+    num_history: 6
+    action_dim: 7
+    action_downsample: 1
+    width: 320
+    height: 192
+    num_inference_steps: 50
+    decode_to_rgb: true
+    view_order: [exterior_right, exterior_left, wrist]
+
+policy:
+  name: openpi
+  checkpoint_path: checkpoints/policy/pi0_droid
+  params:
+    config_name: pi0_droid
+    repo_path: external/openpi
+    pytorch_device: cuda
+    debug: false
+    debug_log_limit: 3
+    exterior_view_name: exterior_left
+    wrist_view_name: wrist
+    stacked_view_order: [exterior_right, exterior_left, wrist]
+    resize_height: 224
+    resize_width: 224
+    joint_position_dim: 7
+    action_adapter_checkpoint_path: checkpoints/action_adapter/model2_15_9.pth
+    intermediate_resize_height: 180
+    policy_skip_step: 2
+    num_action_steps: 5
+
+reward_model:
+  name: dummy
+  params: {}
+
+scheduler:
+  chunk_size: 5
+
+duration: 20
+action_hz: 5
+video_dir: outputs/0404_banana_ctrlworld
+dataset_path: data/benchmark/irom_test_nanobanana
