@@ -75,6 +75,11 @@ def main() -> None:
     p.add_argument("--history-blocks", type=int, default=1,
                    help="Ground-truth blocks used to prime the model ('first frame' = 1).")
     p.add_argument("--max-blocks", type=int, default=0, help="Cap generated blocks (0=to episode end).")
+    p.add_argument("--denoising-steps", type=int, default=0,
+                   help="Many-step preview sampler steps for non-distilled (mid-training) "
+                        "checkpoints. 0 -> use cfg.preview_denoising_steps. Matches the "
+                        "training-time _SamplePreviewer; avoids the few-step distilled list "
+                        "that yields garbage on a student_init/teacher backbone.")
     p.add_argument("--video-fps", type=int, default=8)
     p.add_argument("--separate", action="store_true", help="Also write gt/ and pred/ videos separately.")
     a = p.parse_args()
@@ -84,6 +89,19 @@ def main() -> None:
     if a.latent_root:
         cfg.latent_root = a.latent_root
     max_blocks = a.max_blocks if a.max_blocks > 0 else None
+
+    # Build the SAME many-step sampler the training-time _SamplePreviewer uses for
+    # non-distilled (mid-training) checkpoints. With scheduler=None, model.rollout
+    # falls back to the few-step distilled cfg.denoising_step_list, which produces
+    # garbage on a student_init/teacher backbone.
+    sched = None
+    if getattr(cfg, "stage", "self_forcing") != "self_forcing":
+        from openworld.autoregressive.distill.scheduler import FlowMatchScheduler
+        n = max(2, int(a.denoising_steps) or int(cfg.preview_denoising_steps))
+        ts = cfg.num_train_timestep
+        steps = tuple(int(round(ts * (i + 1) / n)) for i in reversed(range(n)))  # ~ts..ts/n
+        sched = FlowMatchScheduler(steps, num_train_timestep=ts, warp=False)
+        print(f"[replay] preview sampler: {n}-step FlowMatchScheduler (warp=False), stage={cfg.stage}")
 
     out_root = (Path(a.output_dir) if a.output_dir
                 else (Path(a.checkpoint).resolve().parent / "replay" if a.checkpoint
@@ -123,6 +141,7 @@ def main() -> None:
                 model, latent_gt, action_norm,
                 frames_per_block=cfg.frames_per_block, num_history_blocks=a.history_blocks,
                 in_channels=cfg.in_channels, device=device, dtype=cfg.dtype, max_blocks=max_blocks,
+                scheduler=sched,
             )
         except RuntimeError as e:
             print(f"[replay] {ep_id}: skipped ({e})")

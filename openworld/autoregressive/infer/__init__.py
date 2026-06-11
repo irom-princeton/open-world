@@ -13,10 +13,13 @@ from .replay import (
     normalize_actions,
     replay_episode_latents,
 )
+from .interactive import InteractiveRoller, build_preview_scheduler
 
 __all__ = [
     "load_full_episode",
     "load_action_stats",
     "normalize_actions",
     "replay_episode_latents",
+    "InteractiveRoller",
+    "build_preview_scheduler",
 ]
