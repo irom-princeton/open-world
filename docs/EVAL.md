@@ -1,5 +1,7 @@
 # Running Policy Evaluation in OpenWorld
 
+> The current implementation only supports the `svd` models — see [MODELS.md](MODELS.md) for status.
+
 Policy evaluation requires the following:
 
 * Test suite with different test cases
@@ -18,7 +20,9 @@ Each test case requires the following input:
 - Initial robot state + gripper position
 - (Optional) Task instruction
 
-We provide an example test suite for the droid setup at [data/evaluation_suites/irom_test_carrot](data/evaluation_suites/irom_test_carrot). Feel free to create your own following the same format!
+Place your test suite under `data/evaluation_suites/<name>` and point the eval
+config at it. (Note: an example suite is not bundled in this repo — build one from
+your own initial observations following the format above.)
 
 ## Preparing a Policy
 

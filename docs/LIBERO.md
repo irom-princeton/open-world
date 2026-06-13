@@ -2,6 +2,8 @@
 
 We provide examples for using the world model under the LIBERO environment, including: world model training, data/trajectory collection, trajectory replay evaluation, and policy evaluation.
 
+> Current implementation only support `svd` model
+
 ## Setup
 
 ```bash

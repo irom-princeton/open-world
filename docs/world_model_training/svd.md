@@ -1,8 +1,8 @@
-# World Model Training
+# SVD World Model Training
 
 ## Stage 1 — Flow-matching teacher
 
-Standard rectified-flow / flow-matching objective. The model learns the
+Standard flow-matching objective. The model learns the
 velocity field `v(x_t, t)`; at inference it is integrated with Euler over
 many steps (`num_inference_steps≈50`).
 
@@ -28,7 +28,7 @@ Config: `configs/training/libero_wm_shortcut.py`. Key differences vs. the
 teacher:
 
 ```python
-ckpt_path="scheckpoints/wm/libero/checkpoint-30000.pt"
+ckpt_path="checkpoints/wm/libero/checkpoint-30000.pt"
 flow_map_type="shortcut"
 distance_conditioning=True         # UNet now receives dt_base
 learning_rate=5e-6

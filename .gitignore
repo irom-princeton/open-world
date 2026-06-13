@@ -28,5 +28,7 @@ checkpoints/
 external/*
 !external/download_models.sh
 /tests/
+probe_*
+profile_*
 tmp_*
 slurm_outputs/

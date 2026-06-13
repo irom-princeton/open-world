@@ -1,11 +1,7 @@
 # 🌐 open-world
 
-OpenWorld is an open-source platform for building, fine-tuning, and evaluating robotic policies using video world models. We currently support:
+OpenWorld is an open-source platform for building, fine-tuning, and evaluating robotic policies using video world models. We offer support for various world model families and robot platforms - see [MODELS.md](docs/MODELS.md) for details.
 
-* Fast world model inference with shortcut models
-* Policy evaluation on custom benchmarks with automatic scoring
-
-**🔧 Some of the functions are still under construction!**
 
 ## Installation
 
@@ -31,21 +27,17 @@ bash external/download_models.sh
 ```
 
 
-## Workflows
+## Supported Workflows
 
-- 🤖 [Policy Training](docs/TRAIN_POLICY.md)
-- 📋 [Policy Evaluation](docs/EVAL.md)
-- ⚙️ [Policy Fine-tuning](docs/FT.md) (TODO)
-- 🌎 [World Model Training](docs/TRAIN_WM.md) (TODO)
-
-## Next Steps
-
-- [ ] Add more reward function support
-- [ ] Example benchmarks
-- [ ] Data & checkpoints
+|  | bidirectional-svd | AR-wan | AR-cosmos |
+|---|---|---|---|
+| ***🏋️ Training*** | | | |
+| [World Model Training](docs/MODELS.md#training) | ✅ | ✅ | ❌ TODO |
+| [Policy Training](docs/TRAIN_POLICY.md) | ✅ | ✅ | ✅ |
+| ***✨ Inference*** | | | |
+| [Trajectory Replay](docs/TRAJECTORY_REPLAY.md) | ✅ | ✅ | ❌ TODO |
+| [Policy Evaluation](docs/EVAL.md) | ✅ | ❌ TODO | ❌ TODO |
 
 ## Acknowledgements
 
 This repo is based on [Ctrl-World](https://github.com/Robert-gyj/Ctrl-World), [dppo](https://github.com/irom-princeton/dppo), [dsrl](https://github.com/ajwagen/dsrl), [openpi](https://github.com/Physical-Intelligence/openpi), and [robometer](https://github.com/robometer/robometer). 
-
-Core contributors:
