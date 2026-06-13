@@ -115,6 +115,12 @@ reward-topreward = [
     "Pillow>=9.0.0",
     "requests>=2.32.4",
 ]
+reward-wm = [
+    # World-model novelty reward: dsrl_pi0's reward_server.py runs replay
+    # rollouts and scores them by mean LPIPS between the WM prediction and the
+    # recorded trajectory. LPIPS is the reward signal, not optional.
+    "lpips",
+]
 
 [tool.setuptools.packages.find]
 include = ["openworld*"]

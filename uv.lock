@@ -631,8 +631,8 @@ name = "beautifulsoup4"
 version = "4.14.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "soupsieve", marker = "extra == 'extra-9-openworld-policy-dp' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "typing-extensions", marker = "extra == 'extra-9-openworld-policy-dp' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "soupsieve" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c3/b0/1c6a16426d389813b48d95e26898aff79abbde42ad353958ad95cc8c9b21/beautifulsoup4-4.14.3.tar.gz", hash = "sha256:6292b1c5186d356bba669ef9f7f051757099565ad9ada5dd630bd9de5fa7fb86", size = 627737, upload-time = "2025-11-30T15:08:26.084Z" }
 wheels = [
@@ -1077,7 +1077,7 @@ name = "cuda-bindings"
 version = "12.9.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-pathfinder", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'win32' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'win32' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "cuda-pathfinder", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_machine == 'aarch64' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (platform_machine == 'aarch64' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (platform_machine == 'aarch64' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (platform_machine == 'aarch64' and extra == 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform != 'linux' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform != 'linux' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'linux' and extra != 'extra-9-openworld-policy-dp' and extra != 'extra-9-openworld-policy-openpi') or (sys_platform != 'linux' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform != 'linux' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/2b/ebcbb60aa6dba830474cd360c42e10282f7a343c0a1f58d24fbd3b7c2d77/cuda_bindings-12.9.4-cp311-cp311-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:a6a429dc6c13148ff1e27c44f40a3dd23203823e637b87fd0854205195988306", size = 11840604, upload-time = "2025-10-21T14:51:34.565Z" },
@@ -1355,9 +1355,9 @@ wheels = [
 
 [package.optional-dependencies]
 epath = [
-    { name = "fsspec", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "typing-extensions", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "zipp", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "fsspec" },
+    { name = "typing-extensions" },
+    { name = "zipp" },
 ]
 epy = [
     { name = "typing-extensions" },
@@ -1666,10 +1666,10 @@ name = "gdown"
 version = "5.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "beautifulsoup4", marker = "extra == 'extra-9-openworld-policy-dp' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "filelock", marker = "extra == 'extra-9-openworld-policy-dp' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "beautifulsoup4" },
+    { name = "filelock" },
     { name = "requests", extra = ["socks"], marker = "extra == 'extra-9-openworld-policy-dp' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "tqdm", marker = "extra == 'extra-9-openworld-policy-dp' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "tqdm" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/09/6a/37e6b70c5bda3161e40265861e63b64a86bfc6ca6a8f1c35328a675c84fd/gdown-5.2.0.tar.gz", hash = "sha256:2145165062d85520a3cd98b356c9ed522c5e7984d408535409fd46f94defc787", size = 284647, upload-time = "2024-05-12T06:45:12.725Z" }
 wheels = [
@@ -1905,7 +1905,7 @@ name = "grpcio"
 version = "1.78.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/06/8a/3d098f35c143a89520e568e6539cc098fcd294495910e359889ce8741c84/grpcio-1.78.0.tar.gz", hash = "sha256:7382b95189546f375c174f53a5fa873cef91c4b8005faa05cc5b3beea9c4f1c5", size = 12852416, upload-time = "2026-02-06T09:57:18.093Z" }
 wheels = [
@@ -3282,6 +3282,23 @@ wheels = [
 ]
 
 [[package]]
+name = "lpips"
+version = "0.1.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-openworld-policy-dp' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-openworld-libero' or extra != 'extra-9-openworld-policy-dp' or (extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "scipy" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e8/2d/4b8148d32f5bd461eb7d5daa54fcc998f86eaa709a57f4ef6aa4c62f024f/lpips-0.1.4.tar.gz", hash = "sha256:3846331df6c69688aec3d300a5eeef6c529435bc8460bd58201c3d62e56188fa", size = 18029, upload-time = "2021-08-25T22:10:32.803Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/13/1df50c7925d9d2746702719f40e864f51ed66f307b20ad32392f1ad2bb87/lpips-0.1.4-py3-none-any.whl", hash = "sha256:fd537af5828b69d2e6ffc0a397bd506dbc28ca183543617690844c08e102ec5e", size = 53763, upload-time = "2021-08-25T22:10:31.257Z" },
+]
+
+[[package]]
 name = "lxml"
 version = "6.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3992,11 +4009,11 @@ name = "mujoco"
 version = "3.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "absl-py", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "absl-py" },
     { name = "etils", extra = ["epath"], marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "glfw", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "pyopengl", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "glfw" },
+    { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" } },
+    { name = "pyopengl" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/42/82/f8f08dfe9123df4351b560f894f0e7166c1a45a0dd2f04145ed00b8f849b/mujoco-3.6.0.tar.gz", hash = "sha256:15c89f423e33bce0860ad7061763b72323426d6348d7b2e46ebdcc37b11e0905", size = 915041, upload-time = "2026-03-11T01:45:42.807Z" }
 wheels = [
@@ -4210,8 +4227,8 @@ name = "numba"
 version = "0.64.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "llvmlite", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "llvmlite" },
+    { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/23/c9/a0fb41787d01d621046138da30f6c2100d80857bf34b3390dd68040f27a3/numba-0.64.0.tar.gz", hash = "sha256:95e7300af648baa3308127b1955b52ce6d11889d16e8cfe637b4f85d2fca52b1", size = 2765679, upload-time = "2026-02-18T18:41:20.974Z" }
 wheels = [
@@ -5234,7 +5251,7 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform == 'linux' and extra != 'extra-9-openworld-libero' and extra != 'extra-9-openworld-policy-dp' and extra != 'extra-9-openworld-policy-openpi' and extra != 'extra-9-openworld-reward-robometer' and extra != 'extra-9-openworld-reward-topreward'",
 ]
 dependencies = [
-    { name = "nvidia-cublas-cu12", version = "12.8.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'win32' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'win32' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "nvidia-cublas-cu12", version = "12.8.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'linux' and extra == 'extra-9-openworld-libero') or (sys_platform == 'linux' and extra != 'extra-9-openworld-policy-dp') or (sys_platform != 'linux' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'win32' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'win32' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'linux' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'linux' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform != 'linux' and extra == 'extra-9-openworld-libero' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/41/e79269ce215c857c935fd86bcfe91a451a584dfc27f1e068f568b9ad1ab7/nvidia_cudnn_cu12-9.10.2.21-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:c9132cc3f8958447b4910a1720036d9eff5928cc3179b0a51fb6d167c6cc87d8", size = 705026878, upload-time = "2025-06-06T21:52:51.348Z" },
@@ -5395,7 +5412,7 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform == 'linux' and extra != 'extra-9-openworld-libero' and extra != 'extra-9-openworld-policy-dp' and extra != 'extra-9-openworld-policy-openpi' and extra != 'extra-9-openworld-reward-robometer' and extra != 'extra-9-openworld-reward-topreward'",
 ]
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'win32' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'win32' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'linux' and extra == 'extra-9-openworld-libero') or (sys_platform == 'linux' and extra != 'extra-9-openworld-policy-dp') or (sys_platform != 'linux' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'win32' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'win32' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'linux' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'linux' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform != 'linux' and extra == 'extra-9-openworld-libero' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/60/bc/7771846d3a0272026c416fbb7e5f4c1f146d6d80704534d0b187dd6f4800/nvidia_cufft_cu12-11.3.3.83-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:848ef7224d6305cdb2a4df928759dca7b1201874787083b6e7550dd6765ce69a", size = 193109211, upload-time = "2025-03-07T01:44:56.873Z" },
@@ -5575,9 +5592,9 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform == 'linux' and extra != 'extra-9-openworld-libero' and extra != 'extra-9-openworld-policy-dp' and extra != 'extra-9-openworld-policy-openpi' and extra != 'extra-9-openworld-reward-robometer' and extra != 'extra-9-openworld-reward-topreward'",
 ]
 dependencies = [
-    { name = "nvidia-cublas-cu12", version = "12.8.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'win32' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'win32' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "nvidia-cusparse-cu12", version = "12.5.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'win32' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'win32' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'win32' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'win32' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "nvidia-cublas-cu12", version = "12.8.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'linux' and extra == 'extra-9-openworld-libero') or (sys_platform == 'linux' and extra != 'extra-9-openworld-policy-dp') or (sys_platform != 'linux' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'win32' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'win32' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'linux' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'linux' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform != 'linux' and extra == 'extra-9-openworld-libero' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "nvidia-cusparse-cu12", version = "12.5.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'linux' and extra == 'extra-9-openworld-libero') or (sys_platform == 'linux' and extra != 'extra-9-openworld-policy-dp') or (sys_platform != 'linux' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'win32' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'win32' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'linux' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'linux' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform != 'linux' and extra == 'extra-9-openworld-libero' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'linux' and extra == 'extra-9-openworld-libero') or (sys_platform == 'linux' and extra != 'extra-9-openworld-policy-dp') or (sys_platform != 'linux' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'win32' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'win32' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'linux' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'linux' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform != 'linux' and extra == 'extra-9-openworld-libero' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/32/f7cd6ce8a7690544d084ea21c26e910a97e077c9b7f07bf5de623ee19981/nvidia_cusolver_cu12-11.7.3.90-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:db9ed69dbef9715071232caa9b69c52ac7de3a95773c2db65bdba85916e4e5c0", size = 267229841, upload-time = "2025-03-07T01:46:54.356Z" },
@@ -5740,7 +5757,7 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform == 'linux' and extra != 'extra-9-openworld-libero' and extra != 'extra-9-openworld-policy-dp' and extra != 'extra-9-openworld-policy-openpi' and extra != 'extra-9-openworld-reward-robometer' and extra != 'extra-9-openworld-reward-topreward'",
 ]
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'win32' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'win32' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'linux' and extra == 'extra-9-openworld-libero') or (sys_platform == 'linux' and extra != 'extra-9-openworld-policy-dp') or (sys_platform != 'linux' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'emscripten' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'win32' and extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (sys_platform == 'win32' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'linux' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'emscripten' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'win32' and extra != 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform == 'linux' and extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (sys_platform != 'linux' and extra == 'extra-9-openworld-libero' and extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bc/f7/cd777c4109681367721b00a106f491e0d0d15cfa1fd59672ce580ce42a97/nvidia_cusparse_cu12-12.5.8.93-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:9b6c161cb130be1a07a27ea6923df8141f3c295852f4b260c65f18f3e0a091dc", size = 288117129, upload-time = "2025-03-07T01:47:40.407Z" },
@@ -6547,6 +6564,9 @@ reward-topreward = [
     { name = "pillow" },
     { name = "requests" },
 ]
+reward-wm = [
+    { name = "lpips" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -6585,6 +6605,7 @@ requires-dist = [
     { name = "joblib" },
     { name = "lerobot", marker = "extra == 'policy-openpi'", git = "https://github.com/huggingface/lerobot?rev=0cf864870cf29f4738d3ade893e6fd13fbd7cdb5" },
     { name = "libero", marker = "extra == 'libero'", editable = "external/openpi/third_party/libero" },
+    { name = "lpips", marker = "extra == 'reward-wm'" },
     { name = "matplotlib", marker = "extra == 'policy-dp'", specifier = "==3.7.5" },
     { name = "mediapy" },
     { name = "ml-collections", marker = "extra == 'policy-openpi'", specifier = "==1.0.0" },
@@ -6636,7 +6657,7 @@ requires-dist = [
     { name = "websockets", marker = "extra == 'policy-dp'", specifier = ">=13.0" },
     { name = "websockets", marker = "extra == 'policy-openpi'", specifier = ">=13.0" },
 ]
-provides-extras = ["policy-openpi", "policy-dp", "libero", "reward-robometer", "reward-topreward"]
+provides-extras = ["policy-openpi", "policy-dp", "libero", "reward-robometer", "reward-topreward", "reward-wm"]
 
 [[package]]
 name = "opt-einsum"
@@ -7730,11 +7751,11 @@ name = "pynput"
 version = "1.8.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "evdev", marker = "('linux' in sys_platform and extra == 'extra-9-openworld-libero') or ('linux' in sys_platform and extra == 'extra-9-openworld-policy-openpi') or (extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "pyobjc-framework-applicationservices", marker = "(sys_platform == 'darwin' and extra == 'extra-9-openworld-libero') or (sys_platform == 'darwin' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'darwin' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "pyobjc-framework-quartz", marker = "(sys_platform == 'darwin' and extra == 'extra-9-openworld-libero') or (sys_platform == 'darwin' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'darwin' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "python-xlib", marker = "('linux' in sys_platform and extra == 'extra-9-openworld-libero') or ('linux' in sys_platform and extra == 'extra-9-openworld-policy-openpi') or (extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "six", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "evdev", marker = "'linux' in sys_platform or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "pyobjc-framework-applicationservices", marker = "sys_platform == 'darwin' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "python-xlib", marker = "'linux' in sys_platform or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "six" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f0/c3/dccf44c68225046df5324db0cc7d563a560635355b3e5f1d249468268a6f/pynput-1.8.1.tar.gz", hash = "sha256:70d7c8373ee98911004a7c938742242840a5628c004573d84ba849d4601df81e", size = 82289, upload-time = "2025-03-17T17:12:01.481Z" }
 wheels = [
@@ -7873,11 +7894,11 @@ name = "pytest"
 version = "9.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "(sys_platform == 'win32' and extra == 'extra-9-openworld-libero') or (sys_platform == 'win32' and extra == 'extra-9-openworld-policy-openpi') or (sys_platform != 'win32' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-policy-dp') or (extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-policy-openpi') or (extra == 'extra-9-openworld-libero' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (extra == 'extra-9-openworld-policy-dp' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward') or (extra != 'extra-9-openworld-policy-openpi' and extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "iniconfig", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "packaging", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "pluggy", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "pygments", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "iniconfig" },
+    { name = "packaging" },
+    { name = "pluggy" },
+    { name = "pygments" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d1/db/7ef3487e0fb0049ddb5ce41d3a49c235bf9ad299b6a25d5780a89f19230f/pytest-9.0.2.tar.gz", hash = "sha256:75186651a92bd89611d1d9fc20f0b4345fd827c41ccd5c299a868a05d70edf11", size = 1568901, upload-time = "2025-12-06T21:30:51.014Z" }
 wheels = [
@@ -7910,7 +7931,7 @@ name = "python-xlib"
 version = "0.33"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "six", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "six" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/86/f5/8c0653e5bb54e0cbdfe27bf32d41f27bc4e12faa8742778c17f2a71be2c0/python-xlib-0.33.tar.gz", hash = "sha256:55af7906a2c75ce6cb280a584776080602444f75815a7aff4d287bb2d7018b32", size = 269068, upload-time = "2022-12-25T18:53:00.824Z" }
 wheels = [
@@ -8198,7 +8219,7 @@ wheels = [
 
 [package.optional-dependencies]
 socks = [
-    { name = "pysocks", marker = "extra == 'extra-9-openworld-policy-dp' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "pysocks" },
 ]
 
 [[package]]
@@ -9102,7 +9123,7 @@ name = "typeguard"
 version = "4.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "extra == 'extra-9-openworld-policy-dp' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2b/e8/66e25efcc18542d58706ce4e50415710593721aae26e794ab1dec34fb66f/typeguard-4.5.1.tar.gz", hash = "sha256:f6f8ecbbc819c9bc749983cc67c02391e16a9b43b8b27f15dc70ed7c4a007274", size = 80121, upload-time = "2026-02-19T16:09:03.392Z" }
 wheels = [
@@ -9148,9 +9169,9 @@ name = "tyro"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "docstring-parser", marker = "extra == 'extra-9-openworld-policy-dp' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "typeguard", marker = "extra == 'extra-9-openworld-policy-dp' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
-    { name = "typing-extensions", marker = "extra == 'extra-9-openworld-policy-dp' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "docstring-parser" },
+    { name = "typeguard" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/18/4d/442c2bbc4e89cb3d72d8e017f00ee1fb36851d9584ce2af63d916540cf9f/tyro-1.0.9.tar.gz", hash = "sha256:9b80cc32e1afa3f597a4f1bc75157d6e0f438a85c4107c8517b43e88e3f247d5", size = 475192, upload-time = "2026-03-14T07:41:42.497Z" }
 wheels = [
@@ -9290,7 +9311,7 @@ name = "werkzeug"
 version = "3.1.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markupsafe", marker = "extra == 'extra-9-openworld-libero' or extra == 'extra-9-openworld-policy-openpi' or (extra == 'extra-9-openworld-reward-robometer' and extra == 'extra-9-openworld-reward-topreward')" },
+    { name = "markupsafe" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/f1/ee81806690a87dab5f5653c1f146c92bc066d7f4cebc603ef88eb9e13957/werkzeug-3.1.6.tar.gz", hash = "sha256:210c6bede5a420a913956b4791a7f4d6843a43b6fcee4dfa08a65e93007d0d25", size = 864736, upload-time = "2026-02-19T15:17:18.884Z" }
 wheels = [

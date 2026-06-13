@@ -7,6 +7,7 @@ from openworld.envs.world_model_env import WorldModelEnv
 from openworld.policies.base_policy import Policy
 from openworld.utils.video import render_observation_frame
 from openworld.utils.video import save_rollout_video
+from openworld.utils.video import save_rollout_videos_per_view
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,8 @@ class Evaluator:
         max_steps: int = 50,
         video_dir: Optional[str] = None,
         video_fps: int = 5,
+        per_view: bool = False,
+        view_order: Optional[tuple] = None,
     ) -> List[Dict[str, Any]]:
         """Run episodes for every initialization in the dataset.
 
@@ -82,26 +85,54 @@ class Evaluator:
             max_steps: Maximum number of environment steps per episode.
             video_dir: If provided, save rollout videos to this directory.
             video_fps: Frames per second for saved videos.
+            per_view: If True, split each (vertically-stacked) frame into one
+                video per camera view instead of a single combined video.
+            view_order: View names ordered top-to-bottom in the stacked frame.
+                Required when ``per_view`` is True; defaults to the world
+                model's configured ``view_order`` if available.
 
         Returns:
             List of per-episode result dicts.
         """
         results: List[Dict[str, Any]] = []
 
+        if per_view and not view_order:
+            wm_cfg = getattr(getattr(self.env, "world_model", None), "config", None)
+            view_order = getattr(wm_cfg, "view_order", None)
+            if not view_order:
+                raise ValueError(
+                    "per_view=True requires view_order (none found on the world model)."
+                )
+
         for init in dataset:
             episode_result = self.run_episode(init, max_steps=max_steps)
             results.append(episode_result)
 
             if video_dir and episode_result["frames"]:
-                save_rollout_video(
-                    frames=episode_result["frames"],
-                    output_path=f"{video_dir}/{init.id}.mp4",
-                    fps=video_fps,
-                )
-                logger.info(
-                    "Saved video for %s (%d frames)",
-                    init.id,
-                    len(episode_result["frames"]),
-                )
+                if per_view:
+                    written = save_rollout_videos_per_view(
+                        frames=episode_result["frames"],
+                        output_dir=f"{video_dir}/{init.id}",
+                        view_order=tuple(view_order),
+                        fps=video_fps,
+                    )
+                    episode_result["view_video_paths"] = written
+                    logger.info(
+                        "Saved %d per-view videos for %s (%d frames each)",
+                        len(written),
+                        init.id,
+                        len(episode_result["frames"]),
+                    )
+                else:
+                    save_rollout_video(
+                        frames=episode_result["frames"],
+                        output_path=f"{video_dir}/{init.id}.mp4",
+                        fps=video_fps,
+                    )
+                    logger.info(
+                        "Saved video for %s (%d frames)",
+                        init.id,
+                        len(episode_result["frames"]),
+                    )
 
         return results
