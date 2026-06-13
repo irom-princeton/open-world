@@ -14,6 +14,12 @@ POLICY_REGISTRY: dict[str, BackendSpec] = {
         extra_name="policy-openpi",
         required_modules=("jax", "flax", "websockets"),
     ),
+    "openpi_libero": BackendSpec(
+        module_path="openworld.policies.openpi_libero_policy",
+        class_name="OpenPILiberoPolicy",
+        extra_name="policy-openpi",
+        required_modules=("jax", "flax", "websockets"),
+    ),
     "dp": BackendSpec(
         module_path="openworld.policies.dp_policy",
         class_name="DPPolicy",

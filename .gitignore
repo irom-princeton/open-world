@@ -15,8 +15,11 @@ env/
 *.ckpt
 wandb/
 outputs/
+test/
 logs/
+models/
 videos/
+*cache/
 
 assets/
 bash_scripts/

@@ -71,6 +71,18 @@ def main() -> None:
             )
         ])
 
+    # Optional init subset: run only the listed init ids (folder names).
+    init_ids = cfg.get("init_ids")
+    if init_ids:
+        wanted = set(init_ids)
+        selected = [init for init in dataset if init.id in wanted]
+        found = {init.id for init in selected}
+        missing = wanted - found
+        if missing:
+            raise ValueError(f"init_ids not found in dataset: {sorted(missing)}")
+        dataset = InitializationDataset(selected)
+        logger.info("Running init subset (%d): %s", len(selected), sorted(found))
+
     evaluator = Evaluator(env=env, policy=policy)
 
     chunk_size = cfg.get("scheduler", {}).get("chunk_size", 15)
@@ -99,8 +111,12 @@ def main() -> None:
         video_fps,
     )
 
+    per_view = bool(cfg.get("per_view_videos", False))
+    view_order = wm_cfg.get("params", {}).get("view_order")
+
     results = evaluator.run_dataset(
         dataset, max_steps=max_steps, video_dir=video_dir, video_fps=video_fps,
+        per_view=per_view, view_order=tuple(view_order) if view_order else None,
     )
 
     logger.info("Video generation complete: %d episodes → %s", len(results), video_dir)
@@ -115,7 +131,10 @@ def main() -> None:
             "metadata": r.get("metadata", {}),
         }
         if video_dir:
-            ep["video_path"] = str(Path(video_dir).resolve() / f"{r['initialization_id']}.mp4")
+            if per_view and r.get("view_video_paths"):
+                ep["view_video_paths"] = [str(Path(p).resolve()) for p in r["view_video_paths"]]
+            else:
+                ep["video_path"] = str(Path(video_dir).resolve() / f"{r['initialization_id']}.mp4")
         episodes.append(ep)
 
     manifest = {"episodes": episodes}

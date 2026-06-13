@@ -1,0 +1,50 @@
+# Collect pi0.5_libero policy roll-outs in the real LIBERO simulator and
+# store them in the world-model training-data format.
+#
+# Run with:
+#   uv run scripts/run_data_collection.py --config configs/collection/libero_pi05.yaml
+# or via the SLURM/launcher wrapper (sets MUJOCO_GL=egl etc.):
+#   bash bash_scripts/collect_libero.sh
+#
+# Output (per suite) is directly consumable by the WM trainer
+# (LiberoLatentDataset), identical to scripts/preprocess_libero_for_wm.py:
+#   <output_root>/<suite>/annotation/<split>/<episode_id>.json
+#   <output_root>/<suite>/raw_videos/{agentview,wrist}/<episode_id>.mp4
+#   <output_root>/<suite>/latent_videos/{agentview,wrist}/<episode_id>.pt
+#   <output_root>/<suite>/{train,val}_sample.json
+
+policy:
+  config_name: pi05_libero
+  checkpoint_path: gs://openpi-assets/checkpoints/pi05_libero
+  repo_path: external/openpi
+  pytorch_device: cuda
+
+collection:
+  # List of benchmark suites to collect from.
+  task_suites: [libero_10] # libero_10 libero_goal libero_object libero_spatial
+  # Optional: restrict to specific task ids within each suite (null = all tasks)
+  task_ids: null
+  # Number of trajectories collected for EACH task in the suite.
+  trajectories_per_task: 1
+  # null => use each task's default LIBERO instruction (task.language) as the pi0 prompt. Set a string here to override the prompt for all tasks.
+  prompt_override: null
+
+env:
+  resolution: 256        # native LIBERO offscreen render (camera_heights/widths)
+  resize_size: 224       # policy input resolution
+  replan_steps: 5        # execute this many actions per pi0 query (pi05_libero)
+  num_steps_wait: 10     # let objects settle after reset before recording
+  env_max_reward: 1.0
+  seed: 7
+
+save:
+  output_root: data/libero_collected
+  write_raw: true                 # write raw_videos/*.mp4
+  encode_latents: true            # write latent_videos/*.pt (needs svd_path)
+  svd_path: external/stable-video-diffusion-img2vid
+  device: cuda                    # device for the SVD VAE
+  down_sample: 1                  # stride raw 20Hz frames before saving (1 => 20Hz)
+  raw_fps: 20                     # native rate; on-disk fps = raw_fps // down_sample
+  val_fraction: 0.0               # fraction of trajectories routed to the val split
+  num_history: 6                  # sample-index margins (match WM config)
+  num_frames: 5

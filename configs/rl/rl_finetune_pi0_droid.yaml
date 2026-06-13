@@ -1,0 +1,98 @@
+world_model:
+  name: vidwm
+  checkpoint_path: checkpoints/wm/checkpoint-120000.pt
+  params:
+    svd_model_path: external/stable-video-diffusion-img2vid
+    clip_model_path: external/clip-vit-base-patch32
+    debug: false
+    debug_log_limit: 3
+    num_frames: 5
+    num_history: 6
+    action_dim: 7
+    action_downsample: 1
+    width: 320
+    height: 192
+    num_inference_steps: 10
+    decode_to_rgb: true
+    view_order: [exterior_right, exterior_left, wrist]
+
+# --- Action chunk scheduler ---
+scheduler:
+  chunk_size: 5
+
+# --- Policy (Pi0 DROID with LoRA) ---
+policy:
+  config_name: pi0_droid
+  # Use the JAX base checkpoint (not the PyTorch droid inference checkpoint).
+  # The base checkpoint has orbax format with a params/ subdirectory.
+  # LoRA adapters are initialized fresh on top of these base weights.
+  checkpoint_path: gs://openpi-assets/checkpoints/pi0_base
+  repo_path: external/openpi
+
+  trainable_params:
+    # LoRA variants — freeze base weights, only train LoRA adapters.
+    # gemma_2b_lora: rank=16 on attn+ffn (~12M trainable params in VLM)
+    # gemma_300m_lora: rank=32 on attn+ffn (~7M trainable params in expert)
+    # Total trainable: ~20M (LoRA) + ~0.5M (value head) ≈ 20.5M params
+    paligemma_variant: gemma_2b_lora
+    action_expert_variant: gemma_300m_lora
+
+    # To train the full action expert without LoRA (uses more memory):
+    # paligemma_variant: gemma_2b
+    # action_expert_variant: gemma_300m
+    # train_expert_only: true
+
+    # Noise injection
+    noise_method: flow_sde
+    noise_level: 0.5
+    noise_anneal: false
+    num_denoise_steps: 10
+    action_chunk: 5       # must match num_frames from world model
+    action_env_dim: 7     # robot action dimensionality
+
+    # Value head
+    add_value_head: true
+    value_hidden_dim: 512
+
+# --- Reward model (Robometer via subprocess) ---
+reward_model:
+  robometer_dir: external/robometer
+  model_path: robometer/Robometer-4B
+  fps: 2.0
+  gpu: 1              # pin Robometer to a separate GPU to avoid OOM
+  ready_timeout: 900  # seconds to wait for initial model load (server mode)
+  timeout: 120        # seconds per scoring request (model already loaded)
+
+# --- Initialization dataset (benchmark episodes) ---
+dataset:
+  path: data/benchmark/irom_test_carrot
+
+# --- PPO hyperparameters ---
+ppo:
+  lr: 1.0e-5
+  clip_eps: 0.2
+  vf_coef: 0.5
+  entropy_coef: 0.01
+  max_grad_norm: 1.0
+  num_epochs: 4
+  mini_batch_size: 8
+  gamma: 0.99
+  gae_lambda: 0.95
+  normalize_advantages: true
+  target_kl: 0.0  # 0 to disable early stopping
+
+# --- Training loop ---
+training:
+  max_chunks_per_episode: 2 #10
+  episodes_per_iter: 1 #4
+  num_iterations: 100
+  checkpoint_dir: models/rl_finetune/pi0_droid
+  checkpoint_every: 10
+  log_every: 1
+  video_dir: models/rl_finetune/pi0_droid/videos  # saves every rollout video + reward JSON sidecar
+  rng_seed: 42
+
+# --- Weights & Biases logging ---
+wandb:
+  project: open-world-rl-ft
+  run_name: pi0_lora_ppo-carrot

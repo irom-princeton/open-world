@@ -340,6 +340,15 @@ class VidWMDiffusionPipeline(StableVideoDiffusionPipeline):
                 num_his, history, cond_wrist,
                 frame_level_cond, do_classifier_free_guidance,
             )
+        elif flow_map_type == 'flow_matching':
+            latents = self.euler_solver(
+                num_inference_steps, latents,
+                image_latents, image_embeddings,
+                added_time_ids,
+                num_his, history, cond_wrist,
+                frame_level_cond, do_classifier_free_guidance,
+                return_dict_solver=return_dict_solver,
+            )
         else:
             raise NotImplementedError(f'flow_map_type {flow_map_type} not implemented!')
             
@@ -519,6 +528,61 @@ class VidWMDiffusionPipeline(StableVideoDiffusionPipeline):
             }
 
             return output
+
+    @torch.no_grad()
+    def euler_solver(self, num_inference_steps, latents,
+                     image_latents, image_embeddings,
+                     added_time_ids,
+                     num_his=0, history=None, cond_wrist=None,
+                     frame_level_cond=False,
+                     do_classifier_free_guidance=False,
+                     return_dict_solver=False):
+        B = latents.shape[0]
+        device = latents.device
+
+        t_grid = torch.linspace(0.0, 1.0, num_inference_steps + 1, device=device, dtype=torch.float32)
+        dt_grid = t_grid[1:] - t_grid[:-1]
+
+        with self.progress_bar(total=num_inference_steps) as progress_bar:
+            for i in range(num_inference_steps):
+                t_i = t_grid[i]
+                dt = dt_grid[i]
+
+                t_ = t_i.expand(B).view(B, 1, 1, 1, 1).clamp(1/(1+700), 1/(1+0.02))
+
+                # Pure-Euler flow matching: pass zero "distance" so checkpoints
+                # trained with distance-conditioning still get a valid tensor
+                # (Timesteps proj at 0 → no shortcut bias).
+                distance = torch.zeros(B, device=device, dtype=torch.float32)
+
+                v_pred_output = self.predict_v(t_, latents,
+                                               image_latents, image_embeddings,
+                                               added_time_ids, num_his,
+                                               history=history, cond_wrist=cond_wrist, distance=distance,
+                                               frame_level_cond=frame_level_cond,
+                                               do_classifier_free_guidance=do_classifier_free_guidance)
+                v_pred = v_pred_output["pred_vel"]
+
+                latents = latents + v_pred * dt
+
+                progress_bar.update()
+
+        if not return_dict_solver:
+            return latents
+
+        if do_classifier_free_guidance:
+            latent_model_input_wo_cond = v_pred_output["latent_input"].chunk(2)[0]
+            v_pred_output["c_noise"] = v_pred_output["c_noise"].chunk(2)[0]
+            v_pred_output["distance"] = v_pred_output["distance"].chunk(2)[0]
+        else:
+            latent_model_input_wo_cond = v_pred_output["latent_input"]
+
+        return {
+            "frames": latents,
+            "unet_input": latent_model_input_wo_cond,
+            "timestep": v_pred_output["c_noise"].view(B),
+            "distance": v_pred_output["distance"].view(B),
+        }
 
     # from Fast-Ctrl-World
     @torch.no_grad()

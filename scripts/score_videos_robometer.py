@@ -185,42 +185,32 @@ def score_episode(
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Score videos with Robometer")
-    parser.add_argument(
-        "--manifest", required=True, help="Path to manifest JSON from run_evaluation.py"
-    )
-    parser.add_argument(
-        "--model-path",
-        default="robometer/Robometer-4B",
-        help="HuggingFace model id or local checkpoint (default: robometer/Robometer-4B)",
-    )
-    parser.add_argument(
-        "--output", required=True, help="Path to write rewards JSON"
-    )
-    parser.add_argument(
-        "--fps",
-        type=float,
-        default=2.0,
-        help="FPS to sample from videos (default: 2.0)",
-    )
-    args = parser.parse_args()
+def _score_manifest(args_manifest, args_model_path, args_output, args_fps,
+                    model=None, tokenizer=None, batch_collator=None,
+                    exp_config=None, device=None):
+    """Score all episodes in a manifest file.
 
-    manifest = json.loads(Path(args.manifest).read_text())
+    If model/tokenizer/etc. are None, they will be loaded fresh.
+    """
+    manifest = json.loads(Path(args_manifest).read_text())
     episodes = manifest["episodes"]
 
     if not episodes:
-        Path(args.output).write_text(json.dumps({"episodes": []}))
+        Path(args_output).write_text(json.dumps({"episodes": []}))
         return
 
-    print(f"Loading Robometer model from {args.model_path} ...")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    exp_config, tokenizer, processor, reward_model = load_model_from_hf(
-        model_path=args.model_path, device=device
-    )
-    reward_model.eval()
-    batch_collator = setup_batch_collator(processor, tokenizer, exp_config, is_eval=True)
-    print(f"Model loaded on {device}")
+    if model is None:
+        print(f"Loading Robometer model from {args_model_path} ...",
+              file=sys.stderr)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        exp_config, tokenizer, processor, model = load_model_from_hf(
+            model_path=args_model_path, device=device
+        )
+        model.eval()
+        batch_collator = setup_batch_collator(
+            processor, tokenizer, exp_config, is_eval=True
+        )
+        print(f"Model loaded on {device}", file=sys.stderr)
 
     results = []
     for i, ep in enumerate(episodes):
@@ -229,21 +219,23 @@ def main() -> None:
         ep_id = ep["id"]
 
         if not Path(video_path).exists():
-            print(f"  [{i+1}/{len(episodes)}] SKIP {ep_id} (video not found: {video_path})")
+            print(f"  [{i+1}/{len(episodes)}] SKIP {ep_id} "
+                  f"(video not found: {video_path})", file=sys.stderr)
             results.append({"id": ep_id, "error": "video not found"})
             continue
 
-        print(f"  [{i+1}/{len(episodes)}] Scoring {ep_id} ...")
+        print(f"  [{i+1}/{len(episodes)}] Scoring {ep_id} ...",
+              file=sys.stderr)
         try:
             info = score_episode(
                 video_path=video_path,
                 instruction=instruction,
-                model=reward_model,
+                model=model,
                 tokenizer=tokenizer,
                 batch_collator=batch_collator,
                 exp_config=exp_config,
                 device=device,
-                fps=args.fps,
+                fps=args_fps,
             )
             info["id"] = ep_id
             results.append(info)
@@ -252,9 +244,124 @@ def main() -> None:
             results.append({"id": ep_id, "error": str(exc)})
 
     output_data = {"episodes": results}
-    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.output).write_text(json.dumps(output_data, indent=2))
-    print(f"Rewards written to {args.output}")
+    Path(args_output).parent.mkdir(parents=True, exist_ok=True)
+    Path(args_output).write_text(json.dumps(output_data, indent=2))
+    print(f"Rewards written to {args_output}", file=sys.stderr)
+
+
+def run_server(model_path: str, fps: float) -> None:
+    """Run as a persistent server: load model once, then process requests
+    from stdin.
+
+    Protocol (line-based JSON over stdin/stdout):
+      1. Server loads model, prints ``{"status": "ready"}`` to stdout.
+      2. Parent sends a JSON line: ``{"manifest": "<path>", "output": "<path>"}``
+      3. Server scores all episodes, writes results to the output path,
+         then prints ``{"status": "done"}`` to stdout.
+      4. Repeat from step 2.  Send ``{"command": "shutdown"}`` to exit.
+
+    stdout is reserved for protocol messages only.  During model loading
+    and scoring, stdout is temporarily redirected to stderr so that
+    library ``print()`` calls don't pollute the JSON channel.
+    """
+    # Keep a reference to the real stdout for protocol messages.
+    _real_stdout = sys.stdout
+
+    # Redirect stdout → stderr during model loading so that any
+    # library print() calls (transformers, unsloth, etc.) don't
+    # pollute the JSON protocol on stdout.
+    sys.stdout = sys.stderr
+
+    print(f"Loading Robometer model from {model_path} ...")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    exp_config, tokenizer, processor, reward_model = load_model_from_hf(
+        model_path=model_path, device=device
+    )
+    reward_model.eval()
+    batch_collator = setup_batch_collator(
+        processor, tokenizer, exp_config, is_eval=True
+    )
+    print(f"Robometer server ready on {device}")
+
+    # Restore stdout for protocol, then signal readiness.
+    sys.stdout = _real_stdout
+    sys.stdout.write(json.dumps({"status": "ready"}) + "\n")
+    sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError as e:
+            sys.stdout.write(
+                json.dumps({"status": "error", "error": str(e)}) + "\n"
+            )
+            sys.stdout.flush()
+            continue
+
+        if request.get("command") == "shutdown":
+            break
+
+        manifest_path = request.get("manifest", "")
+        output_path = request.get("output", "")
+        req_fps = request.get("fps", fps)
+
+        # Redirect stdout → stderr during scoring too.
+        sys.stdout = sys.stderr
+        try:
+            _score_manifest(
+                manifest_path, model_path, output_path, req_fps,
+                model=reward_model, tokenizer=tokenizer,
+                batch_collator=batch_collator, exp_config=exp_config,
+                device=device,
+            )
+            sys.stdout = _real_stdout
+            sys.stdout.write(json.dumps({"status": "done"}) + "\n")
+        except Exception as exc:
+            sys.stdout = _real_stdout
+            sys.stdout.write(
+                json.dumps({"status": "error", "error": str(exc)}) + "\n"
+            )
+        sys.stdout.flush()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Score videos with Robometer")
+    parser.add_argument(
+        "--manifest", required=False,
+        help="Path to manifest JSON from run_evaluation.py",
+    )
+    parser.add_argument(
+        "--model-path",
+        default="robometer/Robometer-4B",
+        help="HuggingFace model id or local checkpoint (default: robometer/Robometer-4B)",
+    )
+    parser.add_argument(
+        "--output", required=False, help="Path to write rewards JSON"
+    )
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=2.0,
+        help="FPS to sample from videos (default: 2.0)",
+    )
+    parser.add_argument(
+        "--server",
+        action="store_true",
+        help="Run as a persistent server (stdin/stdout JSON protocol)",
+    )
+    args = parser.parse_args()
+
+    if args.server:
+        run_server(args.model_path, args.fps)
+        return
+
+    if not args.manifest or not args.output:
+        parser.error("--manifest and --output are required in non-server mode")
+
+    _score_manifest(args.manifest, args.model_path, args.output, args.fps)
 
 
 if __name__ == "__main__":
