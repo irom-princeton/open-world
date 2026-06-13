@@ -40,6 +40,11 @@ Finally, to generate evaluation videos with reward annotations, run:
 uv sync --extra policy-openpi --extra reward-robometer
 uv run python scripts/run_evaluation.py \
   --config configs/evaluation/example_eval_openpi.yaml
+
+# Example: molmoact2 (DROID checkpoint, in-process bf16 load)
+uv sync --extra policy-molmoact2 --extra reward-robometer
+uv run python scripts/run_evaluation.py \
+  --config configs/evaluation/example_eval_molmoact2.yaml
 ```
 
 💡 `num_inference_steps` controls the number of diffusion denoising steps, set it to a lower value for faster inference (e.g. 4), or a higher value for better quality (e.g. 50).

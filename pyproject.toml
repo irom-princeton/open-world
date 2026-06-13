@@ -32,13 +32,20 @@ dependencies = [
     "torch",
     "torchmetrics",
     "tqdm",
-    "transformers==4.53.2",
+    # CLIP loading in vidwm only needs a relatively-modern transformers; specific
+    # versions are pinned by the policy-* extras (openpi -> 4.53.2,
+    # molmoact2 -> >=4.57). Both extras are mutually-exclusive (see
+    # [tool.uv.conflicts] below) so no two pins coexist.
+    "transformers>=4.53.2",
     "wandb",
     "wandb-osh",
 ]
 
 [project.optional-dependencies]
 policy-openpi = [
+    # OpenPI was validated against this exact transformers version (matches
+    # external/openpi/pyproject.toml). Newer versions may break openpi internals.
+    "transformers==4.53.2",
     "augmax>=0.3.4",
     "beartype==0.19.0",
     "chex>=0.1.89",
@@ -73,7 +80,6 @@ policy-openpi = [
     "websockets>=13.0",
 ]
 policy-dp = [
-    "av==12.3.0",
     "gdown==5.2.0",
     "gym==0.22.0",
     "h5py",
@@ -101,6 +107,20 @@ libero = [
     "future",
     "cloudpickle",
     "gym==0.25.2",
+]
+policy-molmoact2 = [
+    # MolmoAct2 was validated against transformers 4.57.x per its CLAUDE.md.
+    # We bracket the range to avoid silent breakage from newer transformers
+    # restructures (the bf16 textual patches in molmoact2_loader.py only match
+    # the DROID snapshot revision built against this range).
+    "transformers>=4.57,<4.60",
+    "accelerate>=0.34",
+    "huggingface-hub>=0.24",
+    "safetensors>=0.4",
+    # Kept for users who also want to drive a remote host_server_droid.py via
+    # the optional server_url mode in MolmoAct2Policy. Cheap to install.
+    "json-numpy>=0.2.0",
+    "requests>=2.32.0",
 ]
 reward-robometer = [
     # Robometer runs in its own venv (external/robometer) due to
@@ -130,6 +150,7 @@ conflicts = [
     [
         { extra = "policy-dp" },
         { extra = "policy-openpi" },
+        { extra = "policy-molmoact2" },
     ],
     [
         # LIBERO pins gym==0.25.2, policy-dp pins gym==0.22.0; they can't be

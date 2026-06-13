@@ -1,0 +1,45 @@
+world_model:
+  name: ctrlworld
+  checkpoint_path: checkpoints/wm/ctrlworld/v2-checkpoint-120000.pt
+  params:
+    svd_model_path: external/stable-video-diffusion-img2vid
+    clip_model_path: external/clip-vit-base-patch32
+    debug: false
+    debug_log_limit: 3
+    num_frames: 5
+    num_history: 6
+    action_dim: 7
+    action_downsample: 3
+    width: 320
+    height: 192
+    num_inference_steps: 50
+    decode_to_rgb: true
+
+policy:
+  name: openpi
+  checkpoint_path: checkpoints/policy/paligemma_fast_droid
+  params:
+    config_name: paligemma_fast_droid
+    repo_path: external/openpi
+    pytorch_device: cuda
+    debug: false
+    debug_log_limit: 3
+    exterior_view_name: exterior_right
+    wrist_view_name: wrist
+    stacked_view_order: [exterior_left, exterior_right, wrist]
+    resize_height: 224
+    resize_width: 224
+    joint_position_dim: 7
+    action_adapter_checkpoint_path: checkpoints/action_adapter/model2_15_9.pth
+
+reward_model:
+  name: dummy
+  params: {}
+
+scheduler:
+  chunk_size: 15
+
+duration: 30
+action_hz: 15
+video_dir: outputs/roboarena/specialist_wm/rank_towel/paligemma_fast_droid
+dataset_path: data/benchmark/rank_towel

@@ -8,10 +8,9 @@ from typing import Any, Optional
 import cv2
 import numpy as np
 from PIL import Image
-from scipy.spatial.transform import Rotation as R
 
 from openworld.policies.base_policy import Policy
-from openworld.policies.openpi_action_adapter import get_fk_solution
+from openworld.policies.openpi_action_adapter import AdaptedActionChunk, OpenPIActionAdapter
 from openworld.policies.dppo_loader import (
     DEFAULT_POLICY_JSON,
     DEFAULT_DPPO_REPO,
@@ -24,8 +23,11 @@ from openworld.policies.dppo_loader import (
 class DPPolicy(Policy):
     """Adapter around a Diffusion Policy checkpoint.
 
-    The wrapper translates internal observations to the DP-expected format
-    and returns a single action (or action chunk) per call.
+    DPPO policies trained on DROID emit joint *velocities* + gripper position
+    per timestep. The world model expects absolute cartesian end-effector
+    actions (xyz + euler + gripper), so we integrate joint velocities into
+    joint positions with a learned dynamics model (same checkpoint OpenPI
+    uses) and then apply forward kinematics.
     """
 
     def __init__(
@@ -41,6 +43,11 @@ class DPPolicy(Policy):
         view_names: Optional[list[str]] = None,
         stacked_view_order: Optional[list[str]] = None,
         act_steps: Optional[int] = None,
+        action_adapter_checkpoint_path: Optional[str] = None,
+        action_adapter_gripper_max: float = 1.0,
+        policy_skip_step: int = 1,
+        num_action_steps: Optional[int] = None,
+        joint_position_dim: int = 7,
         device: str = "cuda",
         **_: Any,
     ):
@@ -56,11 +63,17 @@ class DPPolicy(Policy):
             stacked_view_order or ["exterior_left", "exterior_right", "wrist"]
         )
         self.act_steps = act_steps
+        self.action_adapter_checkpoint_path = action_adapter_checkpoint_path
+        self.action_adapter_gripper_max = action_adapter_gripper_max
+        self.policy_skip_step = max(int(policy_skip_step), 1)
+        self.num_action_steps = num_action_steps
+        self.joint_position_dim = joint_position_dim
         self.device = device
 
         self._policy = None
+        self._action_adapter: Optional[OpenPIActionAdapter] = None
         self._instruction: Optional[str] = None
-        self._pending_actions: list[np.ndarray] = []
+        self._pending_actions: list[Any] = []
 
     def reset(self, instruction: Optional[str] = None) -> None:
         self._instruction = instruction
@@ -85,48 +98,90 @@ class DPPolicy(Policy):
         if not self._pending_actions:
             dp_observation = self._build_dp_observation(observation=observation, state=state)
             result = self._policy.infer(dp_observation)
-            self._pending_actions = [
-                np.asarray(action, dtype=np.float32)
-                for action in np.asarray(result["actions"])
-            ]
+            predicted = np.asarray(result["actions"], dtype=np.float32)
+            if predicted.ndim == 1:
+                predicted = predicted[np.newaxis, :]
+            self._pending_actions = self._adapt_action_chunk(predicted, state)
 
         if not self._pending_actions:
             raise RuntimeError("DPPolicy produced an empty action sequence.")
 
-        action = self._pending_actions.pop(0)
-        return self._action_to_env_format(action)
+        return self._pending_actions.pop(0)
 
-    @staticmethod
-    def _action_to_env_format(action: np.ndarray) -> dict[str, Any]:
-        """Convert DP action (joint positions + gripper) to world model format.
+    def _adapt_action_chunk(self, predicted: np.ndarray, state: Any) -> list[Any]:
+        """Integrate joint-velocity chunk to cartesian env actions via dynamics + FK.
 
-        The world model expects cartesian actions (xyz + euler + gripper, 7D).
-        The DP policy outputs joint positions + gripper (8D).  We use forward
-        kinematics to bridge the two representations and also propagate the
-        joint-level state so subsequent policy queries see correct proprioception.
+        Falls back to returning raw 1D actions when no adapter checkpoint is
+        configured (e.g. in tests). Real evaluation must set
+        ``action_adapter_checkpoint_path``; without integration, FK on joint
+        velocities collapses to the home pose and the WM renders a static robot.
         """
-        joint_pos = action[:7]
-        gripper_pos = action[7:8]
+        if self.action_adapter_checkpoint_path is None:
+            return [np.asarray(action, dtype=np.float32) for action in predicted]
 
-        # Forward kinematics: joint positions → cartesian pose
-        fk = get_fk_solution(joint_pos)
-        xyz = fk[:3, 3].astype(np.float32)
-        euler = R.from_matrix(fk[:3, :3]).as_euler("xyz").astype(np.float32)
-        cartesian_action = np.concatenate([xyz, euler, gripper_pos], axis=0)
+        adapter = self._get_action_adapter()
+        joint_position, gripper_position = self._extract_joint_state(state)
+        adapted = adapter.adapt(joint_position, gripper_position, predicted)
 
-        return {
-            "env_action": cartesian_action,
-            "state_update": {
-                "robot": {
-                    "state_representation": "cartesian_position_with_gripper",
-                    "state": cartesian_action,
-                    "cartesian_position": cartesian_action[:6],
-                    "joint_position": joint_pos,
-                    "joint_positions": joint_pos,
-                    "gripper_position": gripper_pos,
+        if self.policy_skip_step > 1 or self.num_action_steps is not None:
+            indices = list(range(0, adapted.env_actions.shape[0], self.policy_skip_step))
+            if self.num_action_steps is not None:
+                indices = indices[: self.num_action_steps]
+            adapted = AdaptedActionChunk(
+                env_actions=adapted.env_actions[indices],
+                joint_positions=adapted.joint_positions[indices],
+                gripper_positions=adapted.gripper_positions[indices],
+            )
+
+        step_actions: list[dict[str, Any]] = []
+        for index in range(adapted.env_actions.shape[0]):
+            cartesian_action = adapted.env_actions[index]
+            next_joint = adapted.joint_positions[index]
+            next_gripper = adapted.gripper_positions[index]
+            step_actions.append(
+                {
+                    "env_action": cartesian_action,
+                    "state_update": {
+                        "robot": {
+                            "state_representation": "cartesian_position_with_gripper",
+                            "state": cartesian_action,
+                            "cartesian_position": cartesian_action[:6],
+                            "joint_position": next_joint,
+                            "joint_positions": next_joint,
+                            "gripper_position": next_gripper,
+                        }
+                    },
                 }
-            },
-        }
+            )
+        return step_actions
+
+    def _get_action_adapter(self) -> OpenPIActionAdapter:
+        if self._action_adapter is None:
+            self._action_adapter = OpenPIActionAdapter(
+                checkpoint_path=self.action_adapter_checkpoint_path,
+                gripper_max=self.action_adapter_gripper_max,
+                action_dim=self.joint_position_dim,
+                device=self.device,
+            )
+        return self._action_adapter
+
+    def _extract_joint_state(self, state: Any) -> tuple[np.ndarray, np.ndarray]:
+        if isinstance(state, dict):
+            robot = state.get("robot")
+            if isinstance(robot, dict):
+                joint = robot.get("joint_position")
+                if joint is None:
+                    joint = robot.get("joint_positions")
+                gripper = robot.get("gripper_position")
+                if joint is not None and gripper is not None:
+                    return (
+                        np.asarray(joint, dtype=np.float32).reshape(-1)[: self.joint_position_dim],
+                        np.asarray(gripper, dtype=np.float32).reshape(-1)[:1],
+                    )
+        raise ValueError(
+            "DPPolicy action adapter requires `state.robot.joint_position` (or "
+            "`joint_positions`) and `state.robot.gripper_position`."
+        )
 
     def load_checkpoint(self, checkpoint_path: str) -> None:
         ensure_dppo_repo_on_path(self.repo_path)

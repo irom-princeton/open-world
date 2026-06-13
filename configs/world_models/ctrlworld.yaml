@@ -1,0 +1,43 @@
+name: ctrlworld
+
+# Paths to pretrained model components.
+# Must be set to actual paths before use (e.g. via your evaluation config).
+svd_model_path: null   # e.g. path to stabilityai/stable-video-diffusion-img2vid snapshot
+clip_model_path: null  # e.g. path to openai/clip-vit-base-patch32 snapshot
+checkpoint_path: null  # path to Ctrl-World .pt checkpoint (flat CrtlWorld state_dict)
+
+params:
+  # Optional: point at a different Ctrl-World source checkout.  Defaults to
+  # the vendored copy at external/ctrl_world.
+  repo_path: null
+
+  # Model architecture
+  num_frames: 5
+  num_history: 6
+  action_dim: 7
+  width: 320
+  height: 192
+  frame_level_cond: true
+  text_cond: true
+  his_cond_zero: false
+  dtype: bfloat16
+
+  # Inference parameters (standard SVD scheduler, not flow-matching)
+  motion_bucket_id: 127
+  fps: 7
+  guidance_scale: 1.0
+  min_guidance_scale: 1.0
+  noise_aug_strength: 0.02
+  num_inference_steps: 50
+  decode_chunk_size: 7
+
+  # History indices – Ctrl-World's reference rollout uses denser context.
+  history_idx: [0, 0, -8, -6, -4, -2]
+
+  # Action normalization (DROID percentiles, shared with vidwm).  Pass
+  # action_stat_path to override from a JSON with state_01/state_99 lists.
+  action_normalize: true
+  action_stat_path: null
+
+  # Output
+  decode_to_rgb: true

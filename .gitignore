@@ -21,6 +21,7 @@ models/
 videos/
 *cache/
 
+assets/
 bash_scripts/
 checkpoints/
 data/
@@ -29,3 +30,6 @@ external/*
 tests/
 tmp_*
 slurm_outputs/
+
+dppo_batch_*/
+openpi_batch_*/

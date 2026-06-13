@@ -1,0 +1,23 @@
+{
+  "iter": 0,
+  "tasks": [
+    {
+      "task_prompt": "a pink bowl near the center of the table (a round pink ring with a slightly darker pink interior from above) and a yellow banana resting just to the left of the bowl (a curved yellow crescent from above)",
+      "robot_instruction": "put the banana in the bowl",
+      "failure_mode": "container shape/color: deep round pink bowl",
+      "based_on": "hand-written: banana into different-shaped containers"
+    },
+    {
+      "task_prompt": "a red cup near the center of the table (a small solid red circle from above) and a yellow banana resting just to the right of the cup (a curved yellow crescent from above)",
+      "robot_instruction": "put the banana in the cup",
+      "failure_mode": "container shape: tall narrow red cup with small opening",
+      "based_on": "hand-written: banana into different-shaped containers"
+    },
+    {
+      "task_prompt": "a yellow plate near the center of the table (a flat yellow circle from above) and a yellow banana resting just below the plate (a curved yellow crescent from above)",
+      "robot_instruction": "put the banana on the plate",
+      "failure_mode": "container shape/color: flat yellow plate, same color as the banana",
+      "based_on": "hand-written: banana into different-shaped containers"
+    }
+  ]
+}
