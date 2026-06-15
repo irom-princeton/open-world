@@ -1,0 +1,32 @@
+# Template robot start-state for generated test cases.
+#
+# `openworld.scenegen` clones the `initial_state` block below verbatim into every
+# generated `initialization.yaml`, then overwrites only `instruction` and
+# `metadata`. The pose is a valid DROID tabletop start state (copied from an
+# existing benchmark case), so rollouts begin from a physically consistent
+# robot configuration.
+#
+# To use a different start pose, point `--template-init` at any existing
+# `initialization.yaml` (e.g. one under data/benchmark/<suite>/<case>/), or edit
+# the numbers here. `state` is `cartesian_position_with_gripper`:
+#   [x, y, z, rx, ry, rz, gripper]  (gripper: 0 = open, 1 = closed).
+initial_state:
+  robot:
+    state_representation: cartesian_position_with_gripper
+    state:
+      - 0.3516902029514313
+      - 0.015333493240177631
+      - 0.47845712304115295
+      - 3.129768417005107
+      - -0.009063092255148009
+      - -0.03805739490530872
+      - 0.0
+    joint_position:
+      - 0.005526440683752298
+      - -0.6534815430641174
+      - 0.034633129835128784
+      - -2.5614986419677734
+      - 0.009155582636594772
+      - 1.91649329662323
+      - 0.06815838068723679
+    gripper_position: 0.0
