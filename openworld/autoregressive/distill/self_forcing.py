@@ -56,9 +56,18 @@ def generate_rollout(
     history_blocks: list[torch.Tensor] | None = None,
     kv_cache: KVCache | None = None,
     last_step_grad: bool = False,
+    random_exit: bool = False,
 ) -> tuple[list[torch.Tensor], KVCache]:
     """Few-step, KV-cached autoregressive rollout. Returns the student's clean
-    blocks (the last one carrying grad iff ``last_step_grad``) and the cache."""
+    blocks (the last one carrying grad iff ``last_step_grad``) and the cache.
+
+    ``random_exit`` (Self-Forcing / omni-dreams): instead of always running the
+    full denoising schedule, stop at a random step ``exit_idx`` -- the same step
+    for every block in the rollout -- and take that step's x0 as the block output
+    (grad attaches there iff ``last_step_grad``). This averages ~(n_steps+1)/2
+    forwards/block instead of n_steps, and trains DMD across a *range* of
+    intermediate noise levels rather than only the fully-denoised one.
+    ``random_exit=False`` reproduces the old all-steps / grad-on-last behaviour."""
     if kv_cache is None:
         kv_cache = generator.make_kv_cache()
     B = latent_block_shape[0]
@@ -70,14 +79,24 @@ def generate_rollout(
 
     sigmas = scheduler.sigmas
     n_steps = scheduler.num_steps
+    # One exit step for the whole rollout (same across blocks, à la Self-Forcing's
+    # same_step_across_blocks). Broadcast under DDP/FSDP so every rank agrees.
+    if random_exit and n_steps > 1:
+        exit_idx_t = torch.randint(0, n_steps, (1,), device=dev)
+        import torch.distributed as _dist
+        if _dist.is_available() and _dist.is_initialized():
+            _dist.broadcast(exit_idx_t, src=0)
+        exit_idx = int(exit_idx_t.item())
+    else:
+        exit_idx = n_steps - 1
     blocks: list[torch.Tensor] = []
     for b in range(num_blocks):
         x = torch.randn(latent_block_shape, device=dev, dtype=pdt)
         cb = _cond_for(cond, b)
-        for i in range(n_steps):
+        for i in range(exit_idx + 1):
             sigma_i = sigmas[i].to(dev).expand(B)
             t_i = scheduler.to_timestep(sigma_i)
-            last = i == n_steps - 1
+            last = i == exit_idx
             grad_on = last and last_step_grad
             ctx = torch.enable_grad() if grad_on else torch.no_grad()
             with ctx:
@@ -124,6 +143,8 @@ class SelfForcingTrainer:
         betas: tuple[float, float] = (0.9, 0.999),
         weight_decay: float = 0.0,
         max_grad_norm: float = 0.0,        # 0 -> no clipping
+        score_whole_clip: bool = True,
+        random_exit: bool = False,
     ):
         self.g, self.critic, self.teacher = generator, critic, teacher
         self.sched = scheduler
@@ -132,6 +153,16 @@ class SelfForcingTrainer:
         self.real_cfg = real_cfg
         self.lo, self.hi = dmd_lo, dmd_hi
         self.max_grad_norm = max_grad_norm
+        # Score the critic/teacher on the WHOLE generated clip in one bidirectional
+        # forward (matches omni-dreams / Self-Forcing, where the score nets run with
+        # num_frame_per_block = state_t). The alternative scores each block in
+        # isolation: many more forward passes AND it feeds the bidirectional teacher
+        # 2-frame fragments it was never trained on. Default on; flip to False to
+        # reproduce the old per-block behaviour for an A/B.
+        self.score_whole_clip = score_whole_clip
+        # Stop each rollout at a random denoising step (see ``generate_rollout``).
+        # Large rollout speedup; changes the training signal, so it is opt-in.
+        self.random_exit = random_exit
         for p in self.teacher.parameters():
             p.requires_grad_(False)
         self.opt_g = torch.optim.AdamW(self.g.parameters(), lr=gen_lr,
@@ -155,7 +186,7 @@ class SelfForcingTrainer:
         return generate_rollout(
             self.g, cond, self.sched, frames_per_block=self.fpb, num_blocks=num_blocks,
             latent_block_shape=latent_block_shape, history_blocks=history_blocks,
-            last_step_grad=last_step_grad,
+            last_step_grad=last_step_grad, random_exit=self.random_exit,
         )
 
     def critic_step(self, cond, *, num_blocks, latent_block_shape, history_blocks=None):
@@ -166,29 +197,58 @@ class SelfForcingTrainer:
             blocks, _ = self._rollout(cond_c, num_blocks, latent_block_shape, history_blocks, last_step_grad=False)
         _, fake = self._score_fns(None)
         self.opt_c.zero_grad()
-        # Blocks share the (detached) cond graph, so accumulate then backward once.
-        losses = [critic_denoising_loss(x0, _cond_for(cond_c, 0), fake, self.sched, lo=self.lo, hi=self.hi)[0]
-                  for x0 in blocks]
-        total = torch.stack(losses).sum()
-        total.backward()
+        if self.score_whole_clip:
+            # One denoising loss over the full clip, mean-reduced -- matching
+            # omni-dreams / Self-Forcing (``F.mse_loss(..., reduction='mean')``).
+            # The lr/lr_critic in the configs are copied from those recipes, which
+            # assume this mean scale; the old sum-over-blocks scale over-drove the
+            # optimizers by num_blocks (~8x), which diverged the student to noise.
+            x0 = torch.cat(blocks, dim=1)
+            loss = critic_denoising_loss(x0, _cond_for(cond_c, 0), fake, self.sched, lo=self.lo, hi=self.hi)[0]
+            loss.backward()
+            reported = loss
+        else:
+            # Per-block scoring (A/B). Mean over blocks == mean over the clip, so the
+            # gradient scale matches the whole-clip path -- the flag isolates *where*
+            # the score is evaluated, not the effective LR.
+            losses = [critic_denoising_loss(x0, _cond_for(cond_c, 0), fake, self.sched, lo=self.lo, hi=self.hi)[0]
+                      for x0 in blocks]
+            total = torch.stack(losses).mean()
+            total.backward()
+            reported = total
         self._clip(self.critic.parameters())
         self.opt_c.step()
-        return (total / max(1, len(losses))).item()
+        return reported.item()
 
     def generator_step(self, cond, null_cond, *, num_blocks, latent_block_shape, history_blocks=None):
         blocks, _ = self._rollout(cond, num_blocks, latent_block_shape, history_blocks, last_step_grad=True)
         real, fake = self._score_fns(null_cond)
         self.opt_g.zero_grad()
-        losses = [dmd_generator_loss(x0, _cond_for(cond, 0), real, fake, self.sched, lo=self.lo, hi=self.hi)[0]
-                  for x0 in blocks if x0.requires_grad]
-        if not losses:
+        grad_blocks = [x0 for x0 in blocks if x0.requires_grad]
+        if not grad_blocks:
             return 0.0
-        # All blocks share the cond + backbone graph -> one backward over the sum.
-        total = torch.stack(losses).sum()
-        total.backward()
+        if self.score_whole_clip:
+            # Single DMD loss over the full clip (1 fake + 1 teacher-CFG forward
+            # instead of 3 per block), mean-reduced to match omni-dreams /
+            # Self-Forcing. The configs' lr/lr_critic assume this mean scale; the old
+            # sum-over-blocks scale over-drove the generator by num_blocks (~8x) and
+            # diverged the student off-manifold (rainbow-noise samples).
+            x0 = torch.cat(grad_blocks, dim=1)
+            loss = dmd_generator_loss(x0, _cond_for(cond, 0), real, fake, self.sched, lo=self.lo, hi=self.hi)[0]
+            loss.backward()
+            reported = loss
+        else:
+            # Per-block scoring (A/B). Mean over blocks == mean over the clip, so the
+            # gradient scale matches the whole-clip path; the flag isolates *where*
+            # the score is evaluated, not the effective LR.
+            losses = [dmd_generator_loss(x0, _cond_for(cond, 0), real, fake, self.sched, lo=self.lo, hi=self.hi)[0]
+                      for x0 in grad_blocks]
+            total = torch.stack(losses).mean()
+            total.backward()
+            reported = total
         self._clip(self.g.parameters())
         self.opt_g.step()
-        return (total / len(losses)).item()
+        return reported.item()
 
     def train_step(self, cond, null_cond, *, num_blocks, latent_block_shape, history_blocks=None):
         c_losses = [

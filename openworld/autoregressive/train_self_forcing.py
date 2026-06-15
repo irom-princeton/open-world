@@ -431,6 +431,8 @@ def main(args: ARWMArgs) -> None:
         critic_steps=args.critic_steps_per_gen_step, real_cfg=args.real_guidance_scale,
         dmd_lo=args.dmd_min_step_ratio, dmd_hi=args.dmd_max_step_ratio,
         betas=args.adam_betas, weight_decay=args.weight_decay, max_grad_norm=args.max_grad_norm,
+        score_whole_clip=args.dmd_score_whole_clip,
+        random_exit=args.dmd_random_exit,
     )
 
     # --- data ---------------------------------------------------------------

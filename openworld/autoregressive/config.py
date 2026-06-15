@@ -221,6 +221,17 @@ class ARWMArgs:
     dmd_min_step_ratio: float = 0.02  # DMD samples the score-distillation noise level in
     dmd_max_step_ratio: float = 0.98  # [min, max] * num_train_timestep
     critic_steps_per_gen_step: int = 5  # critic (fake score) updates per generator update
+    # Score the critic/teacher on the whole generated clip in one bidirectional
+    # forward (omni-dreams / Self-Forcing behaviour) rather than per block. Cheaper
+    # (far fewer forward passes) and more correct (the bidirectional teacher sees the
+    # full clip, not isolated 2-frame fragments). Set False only to A/B the old path.
+    dmd_score_whole_clip: bool = True
+    # Stop each self-forcing rollout at a random denoising step (same step across
+    # blocks), à la Self-Forcing / omni-dreams. Big rollout speedup (~(n+1)/2 vs n
+    # forwards per block) and trains DMD across intermediate noise levels. Opt-in
+    # because it changes the training signal -- validate sample quality before
+    # committing to it on a real run.
+    dmd_random_exit: bool = False
     real_guidance_scale: float = 3.5   # CFG scale used inside the real (teacher) score
     fake_guidance_scale: float = 1.0
     teacher_ckpt: str | None = None    # bidirectional teacher (real score); None -> backbone_ckpt
