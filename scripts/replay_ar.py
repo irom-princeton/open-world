@@ -79,7 +79,17 @@ def main() -> None:
                    help="Many-step preview sampler steps for non-distilled (mid-training) "
                         "checkpoints. 0 -> use cfg.preview_denoising_steps. Matches the "
                         "training-time _SamplePreviewer; avoids the few-step distilled list "
-                        "that yields garbage on a student_init/teacher backbone.")
+                        "that yields garbage on a student_init/teacher backbone. "
+                        "On a self_forcing (DMD) config this is normally a no-op (the real "
+                        "few-step list is used); pass a value WITH --force-many-step to render "
+                        "a distilled checkpoint at many steps (collapse-vs-undistilled diagnostic).")
+    p.add_argument("--force-many-step", action="store_true",
+                   help="Use the N-step (--denoising-steps) sampler even on a self_forcing "
+                        "config, instead of the few-step distilled cfg.denoising_step_list.")
+    p.add_argument("--action-override", choices=["none", "zero", "const"], default="none",
+                   help="Diagnostic: 'zero' feeds neutral actions, 'const' holds the first "
+                        "action for the whole rollout. If spurious camera motion vanishes, it "
+                        "was being driven by the action conditioning.")
     p.add_argument("--video-fps", type=int, default=8)
     p.add_argument("--separate", action="store_true", help="Also write gt/ and pred/ videos separately.")
     a = p.parse_args()
@@ -95,13 +105,15 @@ def main() -> None:
     # falls back to the few-step distilled cfg.denoising_step_list, which produces
     # garbage on a student_init/teacher backbone.
     sched = None
-    if getattr(cfg, "stage", "self_forcing") != "self_forcing":
+    use_many_step = (getattr(cfg, "stage", "self_forcing") != "self_forcing") or a.force_many_step
+    if use_many_step:
         from openworld.autoregressive.distill.scheduler import FlowMatchScheduler
         n = max(2, int(a.denoising_steps) or int(cfg.preview_denoising_steps))
         ts = cfg.num_train_timestep
         steps = tuple(int(round(ts * (i + 1) / n)) for i in reversed(range(n)))  # ~ts..ts/n
         sched = FlowMatchScheduler(steps, num_train_timestep=ts, warp=False)
-        print(f"[replay] preview sampler: {n}-step FlowMatchScheduler (warp=False), stage={cfg.stage}")
+        forced = " (forced on self_forcing)" if a.force_many_step and cfg.stage == "self_forcing" else ""
+        print(f"[replay] preview sampler: {n}-step FlowMatchScheduler (warp=False){forced}, stage={cfg.stage}")
 
     out_root = (Path(a.output_dir) if a.output_dir
                 else (Path(a.checkpoint).resolve().parent / "replay" if a.checkpoint
@@ -136,6 +148,12 @@ def main() -> None:
     for ep_id in ep_ids:
         latent_gt, action_raw, text = load_full_episode(cfg.latent_root, a.split, ep_id, cfg.num_cams)
         action_norm = normalize_actions(action_raw, p01, p99)
+        # Diagnostic action overrides: kill action-driven variation to test whether
+        # spurious (static-camera) motion is being driven by the action conditioning.
+        if a.action_override == "zero":
+            action_norm = np.zeros_like(action_norm)                     # neutral action everywhere
+        elif a.action_override == "const":
+            action_norm = np.repeat(action_norm[:1], action_norm.shape[0], axis=0)  # hold the first (no commanded change)
         try:
             gt_lat, pred_lat, n_hist = replay_episode_latents(
                 model, latent_gt, action_norm,

@@ -57,4 +57,11 @@ def get_args():
         tag="ar_wan_dmd_aligned",
         student_init_ckpt="checkpoints/ar_wm/ar_wan_studentinit_aligned/checkpoint-40000.pt",
         teacher_ckpt=_latest_teacher_ckpt(),
+        # DMD distillation is slow per step (~23s) and converges in a few hundred
+        # steps (cf. OmniDreams L0 @ 500, Self-Forcing @ 600), unlike the 150k-step
+        # mid-training runs. Checkpoint much more densely than the base defaults
+        # (rolling 500 / permanent 4000): keep a permanent every 200 steps and an
+        # intermediate (rolling) every 100.
+        checkpointing_steps=100,
+        permanent_checkpoint_steps=200,
     )

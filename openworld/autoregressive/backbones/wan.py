@@ -192,6 +192,11 @@ class WanBackbone(DiTBackbone):
         lo, hi = start_frame // rep, (start_frame + Fr) // rep
         return cond[:, lo:hi]
 
+    def slice_cond_to_frames(self, cond, start_frame, num_frames):
+        # Same frame->action mapping the cached rollout uses per block, so the DMD
+        # score path can align cond to a generated sub-window (see base docstring).
+        return self._block_action_slice(cond, start_frame, num_frames)
+
     # -- forward modes ---------------------------------------------------
     def forward_train(self, latents, timestep, cond, *, frames_per_block, window=None, causal=True):
         B, Fr, C, H, W = latents.shape

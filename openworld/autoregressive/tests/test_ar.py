@@ -90,7 +90,10 @@ def test_multiview_packer_roundtrip():
 def test_self_forcing_smoke_updates_generator():
     from openworld.autoregressive.train_self_forcing import run_smoke
     logs = run_smoke(steps=1)
-    assert set(logs) == {"gen_loss", "critic_loss"}
+    assert set(logs) == {
+        "gen_loss", "critic_loss", "gen_grad_norm", "critic_grad_norm",
+        "dmd_grad_norm", "gen_x0_std", "gen_x0_absmean",
+    }
     assert all(math.isfinite(v) for v in logs.values())
 
 
@@ -247,7 +250,10 @@ def test_cosmos_self_forcing_smoke_updates_generator():
     backbone (previously blocked: cached rollout raised NotImplementedError)."""
     from openworld.autoregressive.train_self_forcing import run_smoke
     logs = run_smoke(steps=1, backbone="cosmos_predict2_2b")
-    assert set(logs) == {"gen_loss", "critic_loss"}
+    assert set(logs) == {
+        "gen_loss", "critic_loss", "gen_grad_norm", "critic_grad_norm",
+        "dmd_grad_norm", "gen_x0_std", "gen_x0_absmean",
+    }
     assert all(math.isfinite(v) for v in logs.values())
 
 
@@ -436,3 +442,33 @@ def test_non_wan_backbone_rejects_nonbaseline_mode():
     cfg = ARWMArgs(backbone="dummy", random_init_backbone=True, action_cond_mode="adaln")
     with pytest.raises(NotImplementedError):
         build_backbone(cfg)
+
+
+def test_slice_cond_to_frames_aligns_generated_window():
+    """The DMD score path scores the GENERATED clip (frames [hist:hist+N]) but was
+    handed the full-window cond, so cross_attn_aligned tied generated frame j to
+    action j instead of action hist+j. ``slice_cond_to_frames`` must reproduce the
+    cond of the truly-aligned actions, and differ from the unsliced (buggy) cond."""
+    C, H, W, fpb = 16, 8, 8, 2
+    hist, n_gen = 4, 8
+    win = hist + n_gen
+    aligned = _wan("cross_attn_aligned")
+    torch.manual_seed(0)
+    x = torch.randn(1, n_gen, C, H, W)          # the generated clip (positions hist..hist+n_gen)
+    t = torch.full((1,), 500.0)
+    cond_full = torch.randn(1, win, 64)         # full-window action cond
+
+    sliced = aligned.slice_cond_to_frames(cond_full, hist, n_gen)
+    assert sliced.shape[1] == n_gen
+    # slicing == taking the generated window's own actions
+    assert torch.equal(sliced, cond_full[:, hist:hist + n_gen])
+
+    with torch.no_grad():
+        v_sliced = aligned.forward_train(x, t, sliced, frames_per_block=fpb, causal=False)
+        v_buggy = aligned.forward_train(x, t, cond_full, frames_per_block=fpb, causal=False)
+    # the off-by-history misalignment genuinely changes the score
+    assert (v_sliced - v_buggy).abs().max().item() > 1e-4
+
+    # global cond modes must be unaffected (no-op slice)
+    base = _wan("cross_attn")
+    assert torch.equal(base.slice_cond_to_frames(cond_full, hist, n_gen), cond_full)

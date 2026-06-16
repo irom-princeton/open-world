@@ -486,7 +486,7 @@ def main(args: ARWMArgs) -> None:
             global_step += 1
             if global_step == start_step + _WARMUP_STEPS:   # baseline after warmup/compile
                 t_warm = time.monotonic()
-            if accelerator.is_main_process and global_step % 50 == 0:
+            if accelerator.is_main_process and global_step % args.log_every_steps == 0:
                 accelerator.log(logs, step=global_step)
                 thru = ""
                 if t_warm is not None and global_step > start_step + _WARMUP_STEPS:

@@ -69,3 +69,15 @@ class DiTBackbone(nn.Module, ABC):
 
     def tokens_per_frame(self, latent_h: int, latent_w: int) -> int:
         return (latent_h // self.patch_spatial) * (latent_w // self.patch_spatial)
+
+    def slice_cond_to_frames(self, cond: torch.Tensor, start_frame: int, num_frames: int) -> torch.Tensor:
+        """Slice an action-cond tensor to the action frames covering latent frames
+        ``[start_frame, start_frame + num_frames)``.
+
+        Default: no-op -- global-cond backbones (``cross_attn`` / ``cross_attn_pe``)
+        attend to the whole cond. Frame-aligned backbones override this so scoring a
+        *sub-window* of the rollout keeps the per-frame cross-attention aligned. The
+        DMD score path scores the *generated* clip, which starts at the history
+        offset (not frame 0); passing the full, unsliced cond would condition
+        generated frame ``j`` on action ``j`` instead of action ``start_frame + j``."""
+        return cond

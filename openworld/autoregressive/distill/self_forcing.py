@@ -170,9 +170,19 @@ class SelfForcingTrainer:
         self.opt_c = torch.optim.AdamW(self.critic.parameters(), lr=critic_lr,
                                        betas=betas, weight_decay=weight_decay)
 
-    def _clip(self, params):
+    def _clip(self, params) -> float:
+        """Clip (if enabled) and return the total grad-norm *before* clipping --
+        a key collapse signal that was previously not surfaced. Under FSDP2 the
+        params carry DTensor grads; ``clip_grad_norm_`` reduces across shards, so
+        its return is the true global norm. When clipping is off we fall back to a
+        best-effort local norm (correct for single-process; per-shard under FSDP)."""
+        params = [p for p in params]
         if self.max_grad_norm and self.max_grad_norm > 0:
-            torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
+            return float(torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm))
+        grads = [p.grad.detach() for p in params if p.grad is not None]
+        if not grads:
+            return 0.0
+        return float(torch.norm(torch.stack([g.norm() for g in grads])))
 
     def _score_fns(self, null_cond):
         # Both scores are bidirectional (teacher + critic-from-teacher), evaluated
@@ -189,6 +199,20 @@ class SelfForcingTrainer:
             last_step_grad=last_step_grad, random_exit=self.random_exit,
         )
 
+    @staticmethod
+    def _hist_frames(history_blocks):
+        """Latent frames of GT history that prime the rollout -- the absolute frame
+        offset of the *generated* clip, used to align the score cond to it."""
+        return sum(b.shape[1] for b in history_blocks) if history_blocks else 0
+
+    def _score_cond(self, cond, start_frame, num_frames):
+        """Cond for scoring a generated sub-window: slice the full-window action
+        cond to the frames being scored so ``cross_attn_aligned`` / ``adaln`` stay
+        aligned (no-op for global cond modes). Fixes the off-by-history misalignment
+        where the score saw generated frame ``j`` conditioned on action ``j`` rather
+        than action ``start_frame + j``."""
+        return self.g.slice_cond_to_frames(_cond_for(cond, 0), start_frame, num_frames)
+
     def critic_step(self, cond, *, num_blocks, latent_block_shape, history_blocks=None):
         # detach cond: the critic step must not push gradients into the generator
         # / action conditioner (it shares the cond tensor across blocks).
@@ -197,6 +221,7 @@ class SelfForcingTrainer:
             blocks, _ = self._rollout(cond_c, num_blocks, latent_block_shape, history_blocks, last_step_grad=False)
         _, fake = self._score_fns(None)
         self.opt_c.zero_grad()
+        hist = self._hist_frames(history_blocks)
         if self.score_whole_clip:
             # One denoising loss over the full clip, mean-reduced -- matching
             # omni-dreams / Self-Forcing (``F.mse_loss(..., reduction='mean')``).
@@ -204,58 +229,91 @@ class SelfForcingTrainer:
             # assume this mean scale; the old sum-over-blocks scale over-drove the
             # optimizers by num_blocks (~8x), which diverged the student to noise.
             x0 = torch.cat(blocks, dim=1)
-            loss = critic_denoising_loss(x0, _cond_for(cond_c, 0), fake, self.sched, lo=self.lo, hi=self.hi)[0]
+            cond_s = self._score_cond(cond_c, hist, x0.shape[1])
+            loss = critic_denoising_loss(x0, cond_s, fake, self.sched, lo=self.lo, hi=self.hi)[0]
             loss.backward()
             reported = loss
         else:
             # Per-block scoring (A/B). Mean over blocks == mean over the clip, so the
             # gradient scale matches the whole-clip path -- the flag isolates *where*
             # the score is evaluated, not the effective LR.
-            losses = [critic_denoising_loss(x0, _cond_for(cond_c, 0), fake, self.sched, lo=self.lo, hi=self.hi)[0]
-                      for x0 in blocks]
+            losses = [critic_denoising_loss(
+                          x0, self._score_cond(cond_c, hist + b * self.fpb, self.fpb),
+                          fake, self.sched, lo=self.lo, hi=self.hi)[0]
+                      for b, x0 in enumerate(blocks)]
             total = torch.stack(losses).mean()
             total.backward()
             reported = total
-        self._clip(self.critic.parameters())
+        critic_grad_norm = self._clip(self.critic.parameters())
         self.opt_c.step()
-        return reported.item()
+        return {"critic_loss": reported.item(), "critic_grad_norm": critic_grad_norm}
 
     def generator_step(self, cond, null_cond, *, num_blocks, latent_block_shape, history_blocks=None):
         blocks, _ = self._rollout(cond, num_blocks, latent_block_shape, history_blocks, last_step_grad=True)
-        real, fake = self._score_fns(null_cond)
         self.opt_g.zero_grad()
         grad_blocks = [x0 for x0 in blocks if x0.requires_grad]
         if not grad_blocks:
-            return 0.0
+            return {"gen_loss": 0.0}
+        # Generated-clip statistics: std collapsing toward 0 (a constant/near-black
+        # output) is the clearest collapse signal -- the logged DMD loss does NOT
+        # reflect it. Cheap to compute and logged every step.
+        x0_cat = torch.cat(grad_blocks, dim=1)
+        with torch.no_grad():
+            x0d = x0_cat.detach().float()
+            x0_std = x0d.std().item()
+            x0_absmean = x0d.abs().mean().item()
+        hist = self._hist_frames(history_blocks)
         if self.score_whole_clip:
             # Single DMD loss over the full clip (1 fake + 1 teacher-CFG forward
             # instead of 3 per block), mean-reduced to match omni-dreams /
             # Self-Forcing. The configs' lr/lr_critic assume this mean scale; the old
             # sum-over-blocks scale over-drove the generator by num_blocks (~8x) and
             # diverged the student off-manifold (rainbow-noise samples).
-            x0 = torch.cat(grad_blocks, dim=1)
-            loss = dmd_generator_loss(x0, _cond_for(cond, 0), real, fake, self.sched, lo=self.lo, hi=self.hi)[0]
+            # Cond/null are sliced to the generated window so the score's per-frame
+            # action alignment matches the clip (off-by-history fix).
+            cond_s = self._score_cond(cond, hist, x0_cat.shape[1])
+            null_s = self.g.slice_cond_to_frames(null_cond, hist, x0_cat.shape[1])
+            real, fake = self._score_fns(null_s)
+            loss, aux = dmd_generator_loss(x0_cat, cond_s, real, fake, self.sched, lo=self.lo, hi=self.hi)
             loss.backward()
             reported = loss
+            dmd_grad_norm = aux["dmd_grad_norm"]
         else:
             # Per-block scoring (A/B). Mean over blocks == mean over the clip, so the
             # gradient scale matches the whole-clip path; the flag isolates *where*
             # the score is evaluated, not the effective LR.
-            losses = [dmd_generator_loss(x0, _cond_for(cond, 0), real, fake, self.sched, lo=self.lo, hi=self.hi)[0]
-                      for x0 in grad_blocks]
-            total = torch.stack(losses).mean()
+            outs = []
+            for b, x0 in enumerate(grad_blocks):
+                sf = hist + b * self.fpb
+                cond_b = self._score_cond(cond, sf, self.fpb)
+                null_b = self.g.slice_cond_to_frames(null_cond, sf, self.fpb)
+                real, fake = self._score_fns(null_b)
+                outs.append(dmd_generator_loss(x0, cond_b, real, fake, self.sched, lo=self.lo, hi=self.hi))
+            total = torch.stack([o[0] for o in outs]).mean()
             total.backward()
             reported = total
-        self._clip(self.g.parameters())
+            dmd_grad_norm = sum(o[1]["dmd_grad_norm"] for o in outs) / len(outs)
+        gen_grad_norm = self._clip(self.g.parameters())
         self.opt_g.step()
-        return reported.item()
+        return {
+            "gen_loss": reported.item(),
+            "gen_grad_norm": gen_grad_norm,
+            "dmd_grad_norm": dmd_grad_norm,
+            "gen_x0_std": x0_std,
+            "gen_x0_absmean": x0_absmean,
+        }
 
     def train_step(self, cond, null_cond, *, num_blocks, latent_block_shape, history_blocks=None):
-        c_losses = [
+        c_outs = [
             self.critic_step(cond, num_blocks=num_blocks, latent_block_shape=latent_block_shape, history_blocks=history_blocks)
             for _ in range(self.critic_steps)
         ]
-        g_loss = self.generator_step(
+        g_out = self.generator_step(
             cond, null_cond, num_blocks=num_blocks, latent_block_shape=latent_block_shape, history_blocks=history_blocks
         )
-        return {"gen_loss": g_loss, "critic_loss": sum(c_losses) / len(c_losses)}
+        n = len(c_outs)
+        return {
+            **g_out,                                                      # gen_loss + gen/dmd grad norms + x0 stats
+            "critic_loss": sum(o["critic_loss"] for o in c_outs) / n,
+            "critic_grad_norm": sum(o["critic_grad_norm"] for o in c_outs) / n,
+        }

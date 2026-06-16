@@ -108,6 +108,7 @@ class ARWMArgs:
     train_batch_size: int = 1
     shuffle: bool = True
     max_train_steps: int = 200_000
+    log_every_steps: int = 50          # scalar-metric logging cadence (set 1 for diagnostics)
     # Step-based checkpoint retention. A *rolling* checkpoint is rewritten every
     # ``checkpointing_steps`` (~1h of wall-clock) and the previous rolling file is
     # deleted once the new one lands -- a crash-safety net that never grows. A

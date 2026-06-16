@@ -54,6 +54,9 @@ class ARWorldModel(nn.Module):
     def make_kv_cache(self, **kw):
         return self.backbone.make_kv_cache(**kw)
 
+    def slice_cond_to_frames(self, cond, start_frame, num_frames):
+        return self.backbone.slice_cond_to_frames(cond, start_frame, num_frames)
+
     @property
     def num_self_layers(self):
         return self.backbone.num_self_layers
