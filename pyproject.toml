@@ -109,6 +109,14 @@ reward-topreward = [
     "Pillow>=9.0.0",
     "requests>=2.32.4",
 ]
+scenegen = [
+    # `openworld.scenegen` builds test-case suites from a language instruction +
+    # an initial image. The guardrail rewrite (stage 1) calls text Gemini
+    # in-process, so google-genai is needed here; the heavy FLUX multiview stage
+    # runs out of the external/diffusers fork in a subprocess (not installed via
+    # this extra). nanobanana (inside that subprocess) also uses google-genai.
+    "google-genai",
+]
 autoregressive = [
     # Backbone weights (Wan2.1-1.3B, Cosmos-Predict2-2B) and their causal
     # self-forcing distillation live entirely on top of the base deps:
