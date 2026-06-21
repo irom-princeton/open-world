@@ -8,17 +8,17 @@
 #SBATCH --mem=128G
 #SBATCH --time=06:00:00
 #
-# Generic 4-GPU DMD distillation launcher for the v4..v10 hyperparameter sweep.
-# Submit with the config path as the first arg and an output subdir name, e.g.:
+# Generic 4-GPU DMD distillation launcher: pass the config path as the first arg.
+# Submit with a matching job-name + output subdir, e.g.:
 #
-#   sbatch --job-name=dmd_aligned_v4_4gpu \
-#          --output=slurm_outputs/ar_dmd_aligned_v4_4gpu/%j.out \
-#          --error=slurm_outputs/ar_dmd_aligned_v4_4gpu/%j.out \
+#   sbatch --job-name=dmd_aligned_v10_4gpu \
+#          --output=slurm_outputs/ar_dmd_aligned_v10_4gpu/%j.out \
+#          --error=slurm_outputs/ar_dmd_aligned_v10_4gpu/%j.out \
 #          bash_scripts/training/train_dmd_aligned_vN_4gpu.sh \
-#          configs/training/ar_wan_droid_aligned_v4_4gpu.py
+#          configs/training/ar_wan_droid_aligned_v10_4gpu.py
 #
-# Same inits / teacher-resolution / guards as train_dmd_aligned_v3_4gpu.sh, but
-# the config (and thus the tuned hyperparameters + output tag) is an argument.
+# Same inits / teacher-resolution / guards as the default DMD launcher, but the
+# config (and thus the hyperparameters + output tag) is an argument.
 
 set -eo pipefail
 

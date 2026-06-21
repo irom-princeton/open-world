@@ -19,7 +19,7 @@ and reports, per (sigma, cfg_scale), the x0-reconstruction MSE to the GT clip.
 If ``aligned`` reconstructs the GT and ``trainer`` does not, the misalignment is
 confirmed. Decoded frames are written for eyeballing.
 
-    python scripts/diag_teacher_score.py --config configs/training/ar_wan_droid_aligned_v2.py
+    python scripts/diag_teacher_score.py --config configs/training/ar_wan_droid_aligned.py
 """
 from __future__ import annotations
 

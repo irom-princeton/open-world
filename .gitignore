@@ -41,9 +41,6 @@ bash_scripts/inference/*
 !bash_scripts/training/
 bash_scripts/training/*
 !bash_scripts/training/train_dmd_aligned.sh
-!bash_scripts/training/train_dmd_aligned_v2.sh
-!bash_scripts/training/train_dmd_aligned_v3.sh
-!bash_scripts/training/train_dmd_aligned_v3_4gpu.sh
 !bash_scripts/training/train_dmd_aligned_vN_4gpu.sh
 checkpoints/
 /data/
