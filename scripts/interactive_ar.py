@@ -108,7 +108,10 @@ class Controls:
     def enqueue(self, direction: str):
         if direction in DIRS:
             with self._lock:
-                self._queue.append(direction)
+                # cap depth + dedupe so a held key can't pile up many queued nudges
+                # (which would keep the button "pressed" for seconds while they drain)
+                if direction not in self._queue and len(self._queue) < 2:
+                    self._queue.append(direction)
 
     def has_pending(self) -> bool:
         with self._lock:
@@ -156,20 +159,31 @@ class FrameHub:
     a freshly-loaded / refreshed tab paints immediately instead of going blank.
     """
 
-    def __init__(self, maxlen: int = 96):
+    def __init__(self, maxlen: int = 96, play_maxlen: int = 16):
         self._cond = threading.Condition()
         self._subs: list[deque[bytes]] = []
         self._last: bytes | None = None
         self._maxlen = maxlen
+        # FIFO playback buffer drained one frame per /frame poll -> smooth, in-order
+        # playback of each generation burst (bounded so latency stays low).
+        self._play: deque[bytes] = deque(maxlen=play_maxlen)
 
     def push(self, jpeg: bytes):
         with self._cond:
             self._last = jpeg
+            self._play.append(jpeg)
             for q in self._subs:
                 q.append(jpeg)
                 while len(q) > self._maxlen:        # bound a slow/zombie client
                     q.popleft()
             self._cond.notify_all()
+
+    def next(self) -> bytes | None:
+        """/frame: pop the next queued frame in order; hold last when drained."""
+        with self._cond:
+            if self._play:
+                self._last = self._play.popleft()
+            return self._last
 
     def subscribe(self) -> deque[bytes]:
         q: deque[bytes] = deque()
@@ -184,6 +198,19 @@ class FrameHub:
             if q in self._subs:
                 self._subs.remove(q)
 
+    def clear(self):
+        """Drop the cached last frame and every subscriber's backlog (used on
+        reseed so old-episode frames don't drain interleaved with the new ones)."""
+        with self._cond:
+            self._last = None
+            self._play.clear()
+            for q in self._subs:
+                q.clear()
+
+    def last(self) -> bytes | None:
+        with self._cond:
+            return self._last
+
     def pop_from(self, q: deque[bytes], timeout: float = 1.0):
         with self._cond:
             if not q:
@@ -191,9 +218,9 @@ class FrameHub:
             return q.popleft() if q else None
 
     def size(self) -> int:
-        """Backlog of the most-backed-up live viewer (0 if nobody watching)."""
+        """Depth of the /frame playback buffer (drives generator backpressure)."""
         with self._cond:
-            return max((len(q) for q in self._subs), default=0)
+            return len(self._play)
 
 
 # --------------------------------------------------------------------------- #
@@ -244,6 +271,8 @@ class Engine:
         self.jpeg_quality = args.jpeg_quality
         self.fps = args.fps
         self._stop = threading.Event()
+        self.status = "loading"
+        self._compute_t0 = 0.0
         self._seed_lock = threading.Lock()
         self._pending_seed: str | None = None
         self.cur_episode: str | None = None
@@ -266,6 +295,8 @@ class Engine:
             self._pending_seed = ep_id
 
     def _do_seed(self, ep_id: str):
+        self.status = "seeding"
+        self.hub.clear()                      # drop old-episode frames so reseed paints cleanly
         latent_gt, action_raw, text = load_full_episode(
             self.cfg.latent_root, self.split, ep_id, self.cfg.num_cams)
         hist_frames = self.history_blocks * self.fpb
@@ -289,8 +320,8 @@ class Engine:
 
     # -- generator loop (the only thread that touches the GPU) -----------
     def run(self):
-        # keep at most ~2 blocks of frames buffered so control latency stays low
-        max_buffered = 2 * self.fpb * 4
+        # keep ~1 block buffered so the displayed frame tracks the live state
+        max_buffered = self.fpb * 4
         while not self._stop.is_set():
             with self._seed_lock:
                 pending = self._pending_seed
@@ -310,6 +341,7 @@ class Engine:
             # queued (the MJPEG stream just holds the last frame). With
             # --roll-when-idle we keep dreaming at the current pose instead.
             if not pending and self.pause_when_idle:
+                self.status = "idle"
                 time.sleep(0.03)
                 continue
             # backpressure: don't dream too far ahead of playback
@@ -319,14 +351,18 @@ class Engine:
             action = self.controls.take() if pending else self.controls.current()
             if action is None:
                 continue
-            t0 = time.time()
+            self.status = "computing"
+            self._compute_t0 = time.time()
             try:
                 rgb = self.roller.step(action)
-                self._last_block_s = time.time() - t0
+                self._last_block_s = time.time() - self._compute_t0
                 self._emit(rgb)
+            except Exception:
+                import traceback; traceback.print_exc()   # keep the generator thread alive
             finally:
                 # release the 'pressed' state only once the block has computed
                 self.controls.done()
+                self.status = "idle"
 
     def stop(self):
         self._stop.set()
@@ -364,11 +400,23 @@ def make_handler(engine: Engine):
                 self.wfile.write(body)
             elif self.path == "/state":
                 ctrl = engine.controls.snapshot() if engine.controls else {}
+                computing_for = (round(time.time() - engine._compute_t0, 2)
+                                 if engine.status == "computing" else 0.0)
                 self._json({"episode": engine.cur_episode,
                             "block_s": round(getattr(engine, "_last_block_s", 0.0), 3),
+                            "status": engine.status, "computing_for": computing_for,
                             **ctrl})
             elif self.path == "/episodes":
                 self._json({"episodes": engine.episodes[:500], "current": engine.cur_episode})
+            elif self.path.split("?")[0] == "/frame":
+                j = engine.hub.next()
+                if j is None:
+                    self.send_error(503); return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(j)))
+                self.end_headers(); self.wfile.write(j)
             elif self.path == "/stream":
                 self._stream()
             else:

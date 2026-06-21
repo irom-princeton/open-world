@@ -250,6 +250,15 @@ class OpenPIPolicy(Policy):
         joint_position, gripper_position = self._extract_joint_state(state)
         adapted = adapter.adapt(joint_position, gripper_position, predicted)
 
+        # Full control-rate absolute joint+gripper trajectory from the dynamics
+        # model (model2_15_9), BEFORE the policy_skip_step subsample. Joint-space
+        # world models (WEAVER) use this to subsample at their own video rate
+        # (RGB_SKIP) and compute relabel-style position deltas. Cartesian models
+        # (ctrl-world/AR) ignore it.
+        pi_joint_traj = np.concatenate(
+            [adapted.joint_positions, adapted.gripper_positions], axis=-1
+        ).astype(np.float32)                                     # [action_num, 8]
+
         # Subsample to match world model temporal resolution
         if self.policy_skip_step > 1:
             indices = list(range(0, adapted.env_actions.shape[0], self.policy_skip_step))
@@ -277,6 +286,7 @@ class OpenPIPolicy(Policy):
                             "joint_position": next_joint,
                             "joint_positions": next_joint,
                             "gripper_position": next_gripper,
+                            "_pi_joint_traj": pi_joint_traj,
                         }
                     },
                 }

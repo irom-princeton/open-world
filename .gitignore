@@ -22,11 +22,38 @@ models/
 videos/
 *cache/
 
-bash_scripts/
+bash_scripts/*
+# Track the launchers needed to run replay / policy-eval / DMD training from a
+# fresh clone (the rest -- diag/profiling/data_process/misc training -- stay local).
+!bash_scripts/eval_wm.sbatch
+!bash_scripts/setup_eval_env.sh
+!bash_scripts/_env.sh
+!bash_scripts/README.md
+!bash_scripts/ar_gpu.slurm
+!bash_scripts/interactive_ar.sh
+!bash_scripts/eval_weaver_0617.sbatch
+!bash_scripts/replay_tri_ar_job.sh
+# subdirs: re-include the dir, then keep only the replay / dmd-training launchers
+!bash_scripts/inference/
+bash_scripts/inference/*
+!bash_scripts/inference/replay_wan.sh
+!bash_scripts/inference/replay_cosmos.sh
+!bash_scripts/training/
+bash_scripts/training/*
+!bash_scripts/training/train_dmd_aligned.sh
+!bash_scripts/training/train_dmd_aligned_v2.sh
+!bash_scripts/training/train_dmd_aligned_v3.sh
+!bash_scripts/training/train_dmd_aligned_v3_4gpu.sh
+!bash_scripts/training/train_dmd_aligned_vN_4gpu.sh
 checkpoints/
 /data/
 external/*
 !external/download_models.sh
+# vidwm has no standalone upstream (it lives in the open-world monorepo), so it
+# is vendored as source here rather than as a submodule. Track it.
+!external/vidwm/
+!external/vidwm/**
+external/vidwm/**/__pycache__/
 /tests/
 probe_*
 profile_*

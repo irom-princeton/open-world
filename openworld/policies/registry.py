@@ -37,10 +37,17 @@ def build_policy(name: str, **kwargs: Any) -> Policy:
         )
 
     spec = POLICY_REGISTRY[name]
+    # In websocket mode (``server_url`` set) the OpenPI policy runs out-of-process
+    # on a server that holds jax/flax; the local client only needs ``websockets``.
+    # This is what lets the policy drive a world model whose venv can't host
+    # jax/openpi (e.g. weaver's torch-2.7 venv).
+    required_modules = spec.required_modules
+    if name in ("openpi", "openpi_libero") and kwargs.get("server_url"):
+        required_modules = tuple(m for m in required_modules if m not in ("jax", "flax"))
     require_modules(
         backend_name=name,
         backend_kind="policy",
-        required_modules=spec.required_modules,
+        required_modules=required_modules,
         extra_name=spec.extra_name,
     )
     policy_cls = load_backend_class(spec)

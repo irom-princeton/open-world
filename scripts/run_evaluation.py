@@ -354,6 +354,14 @@ def main() -> None:
     parser.add_argument(
         "--video_dir", type=str, default=None, help="Override video_dir in config"
     )
+    parser.add_argument(
+        "--checkpoint", type=str, default=None,
+        help="Override world_model.checkpoint_path in config",
+    )
+    parser.add_argument(
+        "--duration", type=float, default=None,
+        help="Override duration (seconds) in config",
+    )
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
@@ -361,6 +369,10 @@ def main() -> None:
         cfg["dataset_path"] = args.dataset_path
     if args.video_dir is not None:
         cfg["video_dir"] = args.video_dir
+    if args.checkpoint is not None:
+        cfg.setdefault("world_model", {})["checkpoint_path"] = args.checkpoint
+    if args.duration is not None:
+        cfg["duration"] = args.duration
     # Phase 1: generate videos
     video_dir = cfg.get("video_dir")
     episodes = _generate_videos(cfg)

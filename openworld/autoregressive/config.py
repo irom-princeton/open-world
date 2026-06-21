@@ -145,6 +145,12 @@ class ARWMArgs:
     # (the forward all-gathers fire on every rank); episode selection is seeded by
     # step so all ranks pick the same episodes and only rank 0 decodes/logs.
     log_samples: bool = True
+    # Sample-preview cadence, DECOUPLED from checkpoint saves. 0 -> previews piggyback
+    # on ``checkpointing_steps`` (legacy behavior); set >0 to preview more often than
+    # we dump full checkpoints (e.g. 50 to eyeball collapse onset while checkpointing
+    # every 100). The preview rollout is its own FSDP collective, so this is safe to
+    # fire on any step independent of the checkpoint block.
+    sample_every: int = 0
     num_sample_videos: int = 2        # random val episodes previewed per checkpoint
     sample_history_blocks: int = 1    # ground-truth blocks used to prime ("first frame")
     sample_max_blocks: int = 8        # cap generated blocks for a fast preview (0 = to ep end)

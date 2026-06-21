@@ -461,6 +461,8 @@ def main(args: ARWMArgs) -> None:
     keeper = _CheckpointKeeper(args.output_dir, args.checkpointing_steps,
                               args.permanent_checkpoint_steps)
     previewer = _SamplePreviewer(args, is_main=accelerator.is_main_process)
+    # previews run on their own cadence (decoupled from checkpoint dumps); 0 -> share it.
+    sample_every = args.sample_every or args.checkpointing_steps
     logger.info(f"Starting AR self-forcing training: {args.backbone}, "
                 f"{args.rollout_blocks} blocks x {args.frames_per_block} frames/block; "
                 f"checkpoints: rolling every {args.checkpointing_steps} steps, "
@@ -505,8 +507,11 @@ def main(args: ARWMArgs) -> None:
                                              global_step, distributed)  # collective
                     if accelerator.is_main_process:
                         _save_resume_atomic(rs, args.output_dir)
-                # qualitative previews share the checkpoint cadence; the rollout is a
-                # collective under FSDP, so this runs on every rank (decode/log on main).
+            # qualitative previews on their OWN cadence (sample_every), decoupled from
+            # checkpoint dumps; the rollout is a collective under FSDP, so this runs on
+            # every rank (decode/log on main). Guarded so a coincident checkpoint step
+            # still previews exactly once.
+            if global_step % sample_every == 0:
                 previewer(gen, global_step, accelerator=accelerator, logger=logger)
             if global_step >= args.max_train_steps:
                 break
