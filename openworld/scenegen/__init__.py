@@ -27,5 +27,17 @@ Entry points:
 """
 
 from openworld.scenegen.guardrail import build_edit_prompt
+from openworld.scenegen.nanobanana import (
+    build_suite,
+    build_suite_from_spec,
+    nanobanana_edit,
+    resolve_base,
+)
 
-__all__ = ["build_edit_prompt"]
+__all__ = [
+    "build_edit_prompt",
+    "nanobanana_edit",
+    "resolve_base",
+    "build_suite",
+    "build_suite_from_spec",
+]

@@ -1,0 +1,57 @@
+# Example suite spec for scripts/scenegen/build_suite.py
+#
+#   GOOGLE_API_KEY=... python scripts/scenegen/build_suite.py \
+#       --spec configs/scenegen/suites/example.yaml
+#
+# Each entry in `edits` becomes one init_<i> case: the three base views
+# (assets/<base>/{wrist,exterior_left,exterior_right}.png) are nanobanana-edited
+# with `prompt` + the shared `keep` clause, and an initialization.yaml is written
+# cloning the robot start state from assets/<base>/template.yaml.
+
+base: tri                       # assets/tri (or 'irom', or a path to a dir of 3 views)
+name: example_suite             # output -> data/benchmark/example_suite
+task_type: manipulation
+
+# Appended to every edit prompt: pins everything the edits must leave alone.
+keep: >
+  Keep the blue mug, the white container/bin, the robot arm and gripper, the
+  camera viewpoint, framing, perspective, scale, and all object positions
+  exactly the same. Do not move, remove, add, warp, or recolor any object.
+
+edits:
+  - label: green_tabletop
+    instruction: put the mug in the white container
+    prompt: >
+      Change ONLY the wooden tabletop surface to a solid, uniform matte green
+      tabletop (a clean, even green color).
+
+  - label: forest_background
+    instruction: put the mug in the white container
+    prompt: >
+      Replace ONLY the room walls and background surrounding the table with an
+      outdoor forest scene — green trees, foliage, and soft natural daylight —
+      as if this table sits in a forest. Keep the tabletop itself unchanged.
+
+  - label: red_tone_lighting
+    instruction: put the mug in the white container
+    prompt: >
+      Relight the entire scene with a warm red/amber tone, as if lit by a red
+      light source, casting a reddish color tint over everything while keeping
+      all details visible. Change ONLY the lighting color/tone across the image.
+
+  # A content edit that DOES change pinned items, so it overrides `keep`.
+  - label: beach_darkwood_cardboard
+    instruction: put the mug in the cardboard box
+    keep: >
+      Keep the blue mug, the robot arm and gripper, the camera viewpoint,
+      framing, perspective, scale, and all object positions exactly the same.
+      Do not move, remove, or add any object, and do not recolor or warp the
+      blue mug or the robot.
+    prompt: >
+      Make three edits to this scene. (1) Replace the room, walls, and background
+      surrounding the table with an outdoor sunny beach — golden sand, blue ocean,
+      and a bright clear sky under warm midday sunlight. (2) Change the wooden
+      tabletop surface to a darker, rich dark-brown wood, keeping the same wood
+      grain and top-down framing. (3) Transform the white plastic container/bin on
+      the table into a plain brown corrugated cardboard box of the same size and
+      shape, sitting open in the exact same position.

@@ -40,8 +40,11 @@ of these rules:
 - Start by stating the view: "This is a robot's first-person top-down \
 (bird's-eye) wrist-camera view of a tabletop."
 - Describe ONLY the objects to place/modify on the table: their color, size, \
-count, and where each sits relative to the others. When useful, add a brief \
-top-down appearance cue (the object's outline as seen from directly above).
+count, and where each sits relative to the others. ALWAYS state that each \
+object must be rendered from this same overhead top-down viewpoint (its top \
+surface seen from directly above, not its side profile), matching the scene's \
+perspective, scale, lighting, and shadows so it stays consistent with the rest \
+of the image.
 - Keep every object fully visible and non-overlapping. No object may hide, \
 cover, or partially block another, and none may be hidden by the gripper. Do \
 NOT introduce occlusion.
@@ -59,8 +62,15 @@ def template_edit_prompt(instruction: str) -> str:
     instruction = instruction.strip().rstrip(".")
     return (
         "This is a robot's first-person top-down (bird's-eye) wrist-camera view "
-        "of a tabletop. Edit the image to "
+        "of a tabletop, looking straight down at the table from directly above. "
+        "Edit the image to "
         f"{instruction}. "
+        "Render any added or modified object from this exact same overhead "
+        "top-down viewpoint, as if photographed straight down from above: show "
+        "its top surface as seen from directly overhead, not its side profile. "
+        "Match the scene's perspective, foreshortening, scale, lighting, and "
+        "shadow direction so the object looks consistent with the rest of this "
+        "top-down image. "
         "Keep every object fully visible and non-overlapping, keep everything "
         "else the same, and do not change the robot gripper or arm."
     )
