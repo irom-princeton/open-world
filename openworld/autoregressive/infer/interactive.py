@@ -24,12 +24,67 @@ from __future__ import annotations
 import contextlib
 import threading
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import torch
 
 from ..data.decode import decode_stacked
 from ..distill.scheduler import FlowMatchScheduler
+
+
+class AsyncWindowDecoder:
+    """Decode the rolling latent window on a *second* device, overlapped with the
+    next block's generation.
+
+    The VAE decode is ~half the per-step wall-clock (see the latency profile) and
+    is causally downstream of generation -- ``decode(block_t)`` needs block t's
+    latents, so it can only overlap with the *generation of block t+1*. This worker
+    runs the decode on its own device/thread, giving a one-block software pipeline:
+    ``submit(window_t)`` starts decoding while the caller generates block t+1, and
+    the matching frames come back from the *next* ``take()``. Net effect: the
+    generator thread (GPU0) no longer blocks on the VAE (GPU1).
+
+    ``submit`` carries an optional ``meta`` (e.g. the action that produced the
+    block) so a consumer can keep frames aligned with their action despite the lag.
+    """
+
+    def __init__(self, decoder, *, num_cams: int, emit_latent_frames: int):
+        self.decoder = decoder                       # VaeLatentDecoder on the decode device
+        self.num_cams = num_cams
+        self.emit = emit_latent_frames
+        self._exec = ThreadPoolExecutor(max_workers=1)
+        self._future = None
+        self._meta = None
+
+    def submit(self, window: torch.Tensor, meta=None) -> None:
+        # Copy to the decode device on the *calling* (generator) thread so the peer
+        # copy is ordered after the generation kernels that produced ``window``;
+        # the worker then decodes purely on its own device, free of GPU0.
+        w = window.detach().to(self.decoder.device)
+        self._future, self._meta = self._exec.submit(self._run, w), meta
+
+    def _run(self, window: torch.Tensor) -> np.ndarray:
+        rgb = decode_stacked(self.decoder, window, self.num_cams)   # [T, V*H, W, 3]
+        Wl = window.shape[0]
+        return rgb if self.emit >= Wl else rgb[-(self.emit * 4):]
+
+    def take(self):
+        """Block for the previously submitted decode; ``(None, None)`` if none pending."""
+        if self._future is None:
+            return None, None
+        f, m = self._future, self._meta
+        self._future = self._meta = None
+        return f.result(), m
+
+    def clear(self) -> None:
+        """Drop any pending decode (used on reseed)."""
+        if self._future is not None:
+            try:
+                self._future.result()
+            except Exception:
+                pass
+            self._future = self._meta = None
 
 
 def build_preview_scheduler(n_steps: int, num_train_timestep: int = 1000) -> FlowMatchScheduler:
@@ -66,9 +121,15 @@ class InteractiveRoller:
         autocast_dtype: torch.dtype | None = torch.bfloat16,
         max_kv_blocks: int | None = None,
         decode_context: int = 2,
+        async_decoder: "AsyncWindowDecoder | None" = None,
+        static_cache: bool = False,
     ):
         self.model = model
         self.decoder = decoder
+        # Optional second-device decoder: when set, ``step`` overlaps the VAE decode
+        # with the next block's generation (one-block pipeline latency; see
+        # AsyncWindowDecoder). ``None`` -> the original synchronous decode.
+        self._adec = async_decoder
         self.num_cams = num_cams
         self.sched = scheduler
         self.device = device
@@ -81,8 +142,15 @@ class InteractiveRoller:
         )
         # latent frames of left-context kept for temporally-continuous decoding
         self.decode_context = decode_context
+        # fixed-shape ring-buffer KV cache (requires a finite max_kv_blocks); its
+        # registered-buffer K/V enable CUDA-graph capture of the per-block forward
+        # under torch.compile(mode="reduce-overhead"). Default: the growing cache.
+        self.static_cache = static_cache
         self._lock = threading.Lock()
         self._ready = False
+        self.last_emitted_action = None              # action paired with the last async-emitted frames
+        self.last_fwd_s = 0.0                        # true model-forward GPU time of the last block (s)
+        self._fwd_ev = None                          # (start,end) CUDA events, read non-blocking next block
 
     # -- helpers ---------------------------------------------------------
     def _autocast(self):
@@ -98,7 +166,10 @@ class InteractiveRoller:
         absolute latent-frame position -- hence we keep the whole history.
         """
         acts = np.stack(self._actions, axis=0)[None]        # [1, N, A]
-        a = torch.from_numpy(acts).to(self.device)
+        # match the param/compute dtype: the action encoder's Linear weights carry
+        # ``pdt`` (bf16 in a pure-bf16 deploy, fp32 under fp32-master+autocast), and
+        # there's no autocast to coerce a fp32 input in the bf16 case.
+        a = torch.from_numpy(acts).to(self.device, self.pdt)
         return self.model.encode_cond(a, cfg_drop=False)
 
     @torch.no_grad()
@@ -126,6 +197,8 @@ class InteractiveRoller:
         ``seed_actions_norm``: ``[hist_frames, A]`` normalized actions (1:1 w/ frames).
         """
         with self._lock:
+            if self._adec is not None:
+                self._adec.clear()                       # drop any in-flight decode from a prior episode
             hist = history_latents.to(self.device, self.pdt)
             hf = hist.shape[0]
             if hf % self.fpb != 0:
@@ -133,7 +206,7 @@ class InteractiveRoller:
             self.last_action = seed_actions_norm[-1].astype(np.float32).copy()
             self._actions = [seed_actions_norm[i].astype(np.float32) for i in range(hf)]
             self._win = deque(maxlen=self.decode_context + self.fpb)
-            self.kv = self.model.make_kv_cache(max_blocks=self.max_kv_blocks)
+            self.kv = self.model.make_kv_cache(max_blocks=self.max_kv_blocks, static=self.static_cache)
             self.start = 0
             zero_t = self.sched.to_timestep(torch.zeros(1, device=self.device))
             with self._autocast():
@@ -159,12 +232,22 @@ class InteractiveRoller:
         with self._lock:
             if not self._ready:
                 raise RuntimeError("call reset() before step()")
+            # Read the prior block's forward timing now that it has surely
+            # finished -- non-blocking (query), so we never stall the stream.
+            if self._fwd_ev is not None and self._fwd_ev[1].query():
+                self.last_fwd_s = self._fwd_ev[0].elapsed_time(self._fwd_ev[1]) / 1000.0
+                self._fwd_ev = None
             a = action_norm.astype(np.float32)
             for _ in range(self.fpb):                                # 1:1 action<->latent-frame
                 self._actions.append(a)
             block_shape = (1, self.fpb, self.in_channels,
                            self._win[-1].shape[-2], self._win[-1].shape[-1])
             n = self.sched.num_steps
+            _cuda = self.device.type == "cuda"
+            if _cuda:
+                _ev0 = torch.cuda.Event(enable_timing=True)
+                _ev1 = torch.cuda.Event(enable_timing=True)
+                _ev0.record()
             with self._autocast():
                 cond = self._encode_cond()
                 x = torch.randn(block_shape, device=self.device, dtype=self.pdt)
@@ -186,8 +269,37 @@ class InteractiveRoller:
                     x0_clean, zero_t, cond, kv_cache=self.kv,
                     start_frame=self.start, commit=True,
                 )
+            if _cuda:
+                # TRUE model-forward latency: GPU span of encode + 4 denoise +
+                # commit on cuda:0, via CUDA events. Read NEXT block (non-blocking)
+                # so timing never stalls the pipeline. Distinct from block_s, which
+                # also includes scheduler/host overhead, GIL contention with the
+                # HTTP threads, and waiting on the overlapped decode.
+                _ev1.record(); self._fwd_ev = (_ev0, _ev1)
             self.start += self.fpb
             block = x0_clean[0]                                       # [fpb, C, V*h, w]
             for f in range(self.fpb):
                 self._win.append(block[f])
+            if self._adec is not None:
+                # Pipeline: hand this block's window to the decode device and return
+                # the PREVIOUS block's frames (decoded during this step's generation).
+                # ``last_emitted_action`` is the action that produced those frames, so
+                # a recorder can stay aligned despite the one-block lag.
+                prev_rgb, prev_action = self._adec.take()
+                self._adec.submit(torch.stack(list(self._win), dim=0), meta=a)
+                self.last_emitted_action = prev_action
+                return prev_rgb
             return self._decode(emit_latent_frames=self.fpb)
+
+    @torch.no_grad()
+    def flush(self):
+        """Drain the final overlapped decode (async mode only); returns ``(rgb, action)``.
+
+        After the last :meth:`step`, one block remains in flight on the decode
+        device -- call this once to emit it. ``(None, None)`` in synchronous mode."""
+        with self._lock:
+            if self._adec is None:
+                return None, None
+            rgb, action = self._adec.take()
+            self.last_emitted_action = action
+            return rgb, action
