@@ -54,6 +54,8 @@ class ARWanWorldModel(WorldModel):
         debug: bool = False,
         debug_log_limit: int = 3,
         max_context_blocks: Optional[int] = None,
+        bf16: bool = False,
+        decode_context: Optional[int] = None,
         **_ignored: Any,
     ) -> None:
         self.config_path = config_path
@@ -66,6 +68,14 @@ class ARWanWorldModel(WorldModel):
         # long rollouts in-distribution. None -> set from cfg in load_checkpoint
         # (num_history_blocks + rollout_blocks); 0 -> unbounded.
         self.max_context_blocks = max_context_blocks
+        # Deploy in pure bf16 (params + VAE) instead of the fp32-master + bf16-autocast
+        # *training* dtype. Inference-only; ~1.3x end-to-end with no quality change.
+        self.bf16 = bool(bf16)
+        # Latent frames of left-context the rolling VAE decode keeps for seam-free
+        # stitching. None -> num_history_blocks*frames_per_block (the previous fixed
+        # default). Smaller -> less redundant decode per step (the dominant cost), at
+        # some risk to block seams; validate on a real rollout before lowering.
+        self._decode_context = decode_context
         self._roller = None
         self._max_kv_blocks = None
         self._device = torch.device(device if torch.cuda.is_available() else "cpu")
@@ -114,22 +124,41 @@ class ARWanWorldModel(WorldModel):
 
         cfg = _load_config(self.config_path)
         self.cfg = cfg
-        self._dtype = cfg.autocast_dtype or cfg.dtype
 
+        # Deploy dtype. bf16: pure-bf16 params, no autocast (params already carry the
+        # compute dtype). Default: the training dtype (fp32 master params + bf16
+        # autocast) -- ``self._dtype`` is the roller's autocast dtype either way.
+        param_dtype = torch.bfloat16 if self.bf16 else cfg.dtype
+        self._dtype = None if self.bf16 else (cfg.autocast_dtype or cfg.dtype)
+
+        # Checkpoints are fp32 master weights; load into fp32, then cast the assembled
+        # model to the deploy dtype (cast-after-load avoids any fp32->bf16->fp32 churn
+        # in load_state_dict and keeps the checkpoint values exact pre-cast).
         model = ARWorldModel(cfg).to(self._device, cfg.dtype).eval()
         sd = torch.load(checkpoint_path, map_location="cpu")
         missing, unexpected = model.load_state_dict(sd, strict=False)
+        if param_dtype != cfg.dtype:
+            model = model.to(param_dtype)
         logger.info(
-            "ARWanWorldModel: loaded %s (missing=%d unexpected=%d)",
-            checkpoint_path, len(missing), len(unexpected),
+            "ARWanWorldModel: loaded %s (missing=%d unexpected=%d) param_dtype=%s",
+            checkpoint_path, len(missing), len(unexpected), param_dtype,
         )
         self.model = model
 
-        vae = AutoencoderKLWan.from_pretrained(
+        # Encoder VAE stays fp32 (used once at bootstrap; precision is cheap there).
+        # The decoder VAE -- the per-step hot path -- runs at the deploy dtype, so a
+        # bf16 deploy decodes in bf16 (~1.5x). Separate instances so casting the
+        # decoder doesn't perturb the encoder.
+        vae_enc = AutoencoderKLWan.from_pretrained(
             self.vae_dir, subfolder="vae", torch_dtype=torch.float32
         )
-        self.enc = VaeLatentEncoder(vae, device=self._device, dtype=torch.float32)
-        self.dec = VaeLatentDecoder(vae, device=self._device, dtype=torch.float32)
+        self.enc = VaeLatentEncoder(vae_enc, device=self._device, dtype=torch.float32)
+        dec_dtype = torch.bfloat16 if self.bf16 else torch.float32
+        vae_dec = (
+            AutoencoderKLWan.from_pretrained(self.vae_dir, subfolder="vae", torch_dtype=dec_dtype)
+            if self.bf16 else vae_enc
+        )
+        self.dec = VaeLatentDecoder(vae_dec, device=self._device, dtype=dec_dtype)
 
         self._p01, self._p99 = load_action_stats(self.stats_root)
 
@@ -254,11 +283,15 @@ class ARWanWorldModel(WorldModel):
             seed = normalize_actions(
                 np.repeat(init[None], hist_lat.shape[0], axis=0), self._p01, self._p99
             ).astype(np.float32)
+            decode_context = (
+                self._decode_context if self._decode_context is not None
+                else cfg.num_history_blocks * fpb
+            )
             self._roller = InteractiveRoller(
                 self.model, self.dec, num_cams=self.num_cams, scheduler=self.sched,
                 device=self._device, autocast_dtype=self._dtype,
                 max_kv_blocks=self._max_kv_blocks,
-                decode_context=cfg.num_history_blocks * fpb,
+                decode_context=decode_context,
             )
             self._roller.reset(hist_lat, seed)                       # prime (returns bootstrap RGB)
             self._rollout_count = 0

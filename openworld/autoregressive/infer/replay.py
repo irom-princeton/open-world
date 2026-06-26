@@ -30,12 +30,26 @@ import torch
 # ---------------------------------------------------------------------------
 # Data loading (matches scripts/preprocess_ar_latents.py + ARLatentDataset)
 # ---------------------------------------------------------------------------
-def load_action_stats(latent_root: str) -> tuple[np.ndarray, np.ndarray]:
-    """Load the train-set action percentiles used to normalize actions."""
-    with open(os.path.join(latent_root, "stats.json")) as f:
+def load_action_stats(
+    latent_root: str, stats_file: str = "stats.json",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Load the train-set action percentiles used to normalize actions.
+
+    ``stats_file`` selects the action space's stats (``stats.json`` for cartesian,
+    ``stats_joint.json`` for joint_pos) -- pass ``cfg.stats_file``.
+    """
+    with open(os.path.join(latent_root, stats_file)) as f:
         stat = json.load(f)
     return (np.asarray(stat["state_01"], dtype=np.float32),
             np.asarray(stat["state_99"], dtype=np.float32))
+
+
+def load_joint_actions(latent_root: str, split: str) -> dict:
+    """Load the joint-position sidecar for ``split`` (dict ep_id -> [Lf, 8])."""
+    path = os.path.join(latent_root, f"{split}_joint_actions.npy")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"no {split}_joint_actions.npy under {latent_root}")
+    return np.load(path, allow_pickle=True).item()
 
 
 def normalize_actions(action: np.ndarray, p01: np.ndarray, p99: np.ndarray, eps: float = 1e-8) -> np.ndarray:
@@ -44,20 +58,35 @@ def normalize_actions(action: np.ndarray, p01: np.ndarray, p99: np.ndarray, eps:
 
 
 def load_full_episode(
-    latent_root: str, split: str, ep_id: str, num_cams: int,
+    latent_root: str, split: str, ep_id: str, num_cams: int, wrist_view_idx: int = 2,
+    joint_actions: dict | None = None,
 ) -> tuple[torch.Tensor, np.ndarray, str]:
     """Load one preprocessed episode as the full (un-windowed) clip.
 
     Returns ``(latent [L, C, V*h, w] fp32, action [L, action_dim] raw, text)`` —
     cameras height-stacked, matching ``ARLatentDataset.__getitem__`` but over the
-    whole episode rather than a random window.
+    whole episode rather than a random window. View subsetting (``num_cams`` <
+    stored views -> wrist + side cameras) is deterministic here so previews/eval
+    are reproducible.
+
+    When ``joint_actions`` (a preloaded ``{split}_joint_actions.npy`` dict) is
+    given, the 8-dim joint action for ``ep_id`` is returned instead of the .pt's
+    cartesian ``action`` -- matching ``action_space='joint_pos'`` training.
     """
+    from ..data.views import select_view_indices
+
     rec = torch.load(os.path.join(latent_root, split, f"{ep_id}.pt"), weights_only=False)
     latent = rec["latent"].float()                 # [V, C, Lf, h, w]
-    action = rec["action"].numpy()                 # [Lf, action_dim]
-    V, C, Lf, h, w = latent.shape
-    V = min(V, num_cams)
-    lat = latent[:V]                               # [V, C, Lf, h, w]
+    if joint_actions is not None:
+        if str(ep_id) not in joint_actions:
+            raise KeyError(f"ep_id {ep_id!r} missing from {split}_joint_actions.npy")
+        action = np.asarray(joint_actions[str(ep_id)], dtype=np.float32)  # [Lf, 8]
+    else:
+        action = rec["action"].numpy()             # [Lf, action_dim]
+    V_stored, C, Lf, h, w = latent.shape
+    sel = select_view_indices(V_stored, num_cams, wrist_view_idx, deterministic=True)
+    V = len(sel)
+    lat = latent[sel]                              # [V, C, Lf, h, w]
     # height-stack cameras: [V, C, Lf, h, w] -> [Lf, C, V*h, w]
     lat = lat.permute(2, 1, 0, 3, 4).reshape(Lf, C, V * h, w).contiguous()
     return lat.float(), action, rec.get("text", "")
