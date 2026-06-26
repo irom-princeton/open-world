@@ -39,6 +39,16 @@ def _gate_perframe(x, gate, Fr, tpf):
     return (x.unflatten(1, (Fr, tpf)) * gate.unsqueeze(2)).flatten(1, 2)
 
 
+def _kv_kwargs(static_kv):
+    """Static-cache self-attn kwargs (empty when not static). Shared across layers:
+    only the validity mask, ring write position, and commit flag are threaded as
+    inputs -- the per-layer K/V live as registered buffers on each ``attn1.kv``."""
+    if static_kv is None:
+        return {}
+    kv_mask, kv_wpos, kv_commit = static_kv
+    return dict(kv_mask=kv_mask, kv_wpos=kv_wpos, kv_commit=kv_commit)
+
+
 def _condition_embedder_forward(self, timestep, encoder_hidden_states, encoder_hidden_states_image=None):
     """WanTimeTextImageEmbedding.forward supporting ``timestep`` [B] or [B, T].
 
@@ -73,13 +83,20 @@ def _condition_embedder_forward(self, timestep, encoder_hidden_states, encoder_h
     return temb, timestep_proj, encoder_hidden_states, encoder_hidden_states_image
 
 
-def _block_forward(self, hidden_states, encoder_hidden_states, temb, rotary_emb):
+def _block_forward(self, hidden_states, encoder_hidden_states, temb, rotary_emb,
+                   kv_mask=None, kv_wpos=None, kv_commit=False):
     """WanTransformerBlock.forward supporting per-frame modulation.
 
     ``temb`` is the projection, either ``[B, 6, dim]`` (global) or
     ``[B, Fr, 6, dim]`` (per-frame). Per-frame modulation reshapes the token
     sequence so each frame's ``tpf`` tokens share that frame's (shift, scale,
-    gate); no ``[B, seq, ...]`` tensor is materialized."""
+    gate); no ``[B, seq, ...]`` tensor is materialized.
+
+    ``kv_*`` (when set) thread this forward's static KV-cache validity mask + ring
+    write position + commit flag to the self-attention processor as explicit inputs
+    (so a compiled block loop tracks the in-place cache mutation, which lives in the
+    ``attn1.kv`` registered buffers); only attn1 (self) gets them."""
+    _kv = dict(kv_mask=kv_mask, kv_wpos=kv_wpos, kv_commit=kv_commit)
     if temb.ndim == 4:  # per-frame: [B, Fr, 6, dim]
         Fr = temb.shape[1]
         tpf = hidden_states.shape[1] // Fr
@@ -88,7 +105,7 @@ def _block_forward(self, hidden_states, encoder_hidden_states, temb, rotary_emb)
         # each [B, Fr, dim]
         norm_hidden_states = _affine_perframe(
             self.norm1(hidden_states.float()), scale_msa, shift_msa, Fr, tpf).type_as(hidden_states)
-        attn_output = self.attn1(hidden_states=norm_hidden_states, rotary_emb=rotary_emb)
+        attn_output = self.attn1(hidden_states=norm_hidden_states, rotary_emb=rotary_emb, **_kv)
         hidden_states = (hidden_states.float()
                          + _gate_perframe(attn_output.float(), gate_msa, Fr, tpf)).type_as(hidden_states)
 
@@ -107,7 +124,7 @@ def _block_forward(self, hidden_states, encoder_hidden_states, temb, rotary_emb)
     shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
         self.scale_shift_table + temb.float()).chunk(6, dim=1)
     norm_hidden_states = (self.norm1(hidden_states.float()) * (1 + scale_msa) + shift_msa).type_as(hidden_states)
-    attn_output = self.attn1(hidden_states=norm_hidden_states, rotary_emb=rotary_emb)
+    attn_output = self.attn1(hidden_states=norm_hidden_states, rotary_emb=rotary_emb, **_kv)
     hidden_states = (hidden_states.float() + attn_output * gate_msa).type_as(hidden_states)
     norm_hidden_states = self.norm2(hidden_states.float()).type_as(hidden_states)
     attn_output = self.attn2(hidden_states=norm_hidden_states, encoder_hidden_states=encoder_hidden_states)
@@ -126,8 +143,16 @@ def _model_forward(
     encoder_hidden_states_image=None,
     return_dict=True,
     attention_kwargs=None,
+    static_kv=None,
 ):
-    """WanTransformer3DModel.forward supporting ``timestep`` of shape [B] or [B, T]."""
+    """WanTransformer3DModel.forward supporting ``timestep`` of shape [B] or [B, T].
+
+    ``static_kv`` (set by the backbone for the static-cache rollout) is
+    ``(mask, write_pos, commit)`` -- the shared validity mask + ring write position +
+    commit flag -- threaded to each block's self-attention as explicit inputs so a
+    compiled block loop tracks the in-place cache mutation (the K/V themselves are
+    registered buffers on each ``attn1.kv``). ``None`` -> the ctx-based path (dynamic
+    cache / train / eager)."""
     if attention_kwargs is not None:
         attention_kwargs = attention_kwargs.copy()
         lora_scale = attention_kwargs.pop("scale", 1.0)
@@ -163,13 +188,23 @@ def _model_forward(
     if encoder_hidden_states_image is not None:
         encoder_hidden_states = torch.concat([encoder_hidden_states_image, encoder_hidden_states], dim=1)
 
+    runner = getattr(self, "_compiled_block_runner", None)
     if torch.is_grad_enabled() and self.gradient_checkpointing:
         for block in self.blocks:
             hidden_states = self._gradient_checkpointing_func(
                 block, hidden_states, encoder_hidden_states, timestep_proj, rotary_emb)
+    elif runner is not None:
+        # Compiled block loop (inference only). RoPE (start_frame-dependent) is
+        # computed above in eager mode and enters only as the ``rotary_emb`` tensor;
+        # the static KV cache enters as ``static_kv`` (mask/write_pos/commit) explicit
+        # inputs while its K/V are persistent ``attn1.kv`` buffers -- so shapes are
+        # constant and the in-place cache mutation is tracked. One graph per
+        # commit/denoise. See ``enable_block_compile``.
+        hidden_states = runner(hidden_states, encoder_hidden_states, timestep_proj, rotary_emb, static_kv)
     else:
+        _kv = _kv_kwargs(static_kv)
         for block in self.blocks:
-            hidden_states = block(hidden_states, encoder_hidden_states, timestep_proj, rotary_emb)
+            hidden_states = block(hidden_states, encoder_hidden_states, timestep_proj, rotary_emb, **_kv)
 
     # Output norm, projection & unpatchify
     if perframe:
@@ -197,6 +232,36 @@ def _model_forward(
     if not return_dict:
         return (output,)
     return Transformer2DModelOutput(sample=output)
+
+
+def enable_block_compile(transformer, *, mode: str = "default", fullgraph: bool = False,
+                         dynamic: bool | None = False) -> None:
+    """Compile the transformer-block loop for faster inference (idempotent).
+
+    Compiles only the per-block stack -- not ``self.rope`` / patch-embed / output
+    projection -- so the absolute ``start_frame`` (which changes every rollout step)
+    affects the compiled region only through the precomputed ``rotary_emb`` tensor,
+    keeping shapes stable across steps. The KV cache mutates inside the blocks, so
+    Dynamo may insert graph breaks there; ``mode="default"`` tolerates that, whereas
+    ``mode="reduce-overhead"`` (CUDA graphs) needs the cache shapes to have settled.
+
+    Inference-only: the grad/gradient-checkpointing path in ``_model_forward`` always
+    bypasses the compiled runner, so training is unaffected.
+    """
+    import torch
+
+    if getattr(transformer, "_compiled_block_runner", None) is not None:
+        return
+    blocks = transformer.blocks
+
+    def _runner(hidden_states, encoder_hidden_states, timestep_proj, rotary_emb, static_kv=None):
+        _kv = _kv_kwargs(static_kv)
+        for block in blocks:
+            hidden_states = block(hidden_states, encoder_hidden_states, timestep_proj, rotary_emb, **_kv)
+        return hidden_states
+
+    transformer._compiled_block_runner = torch.compile(
+        _runner, mode=mode, fullgraph=fullgraph, dynamic=dynamic)
 
 
 def patch_for_perframe_timestep(transformer) -> None:

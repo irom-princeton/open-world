@@ -26,7 +26,7 @@ import torch
 from .base import DiTBackbone
 from ._attn import attach_block_causal, attach_cross_align
 from ..causal.context import CausalContext
-from ..causal.kv_cache import KVCache
+from ..causal.kv_cache import KVCache, StaticLayerKVCache
 from ..causal.mask import block_ids_for_video, dense_block_causal_mask, frame_aligned_cross_mask
 
 
@@ -37,7 +37,13 @@ def _offset_rope(rope, hidden_states: torch.Tensor, frame_offset: int) -> torch.
     p_t, p_h, p_w = rope.patch_size
     ppf, pph, ppw = num_frames // p_t, height // p_h, width // p_w
     ahd = rope.attention_head_dim
-    freqs = rope.freqs.to(hidden_states.device)
+    # Cache the freqs table on-device once. The stock code re-runs ``.to(device)``
+    # every call -- a host-side op that, if this ran inside a compiled/graphed
+    # region, would force a graph partition. Caching keeps the per-step RoPE pure.
+    freqs = getattr(rope, "_freqs_dev", None)
+    if freqs is None or freqs.device != hidden_states.device:
+        freqs = rope.freqs.to(hidden_states.device)
+        rope._freqs_dev = freqs
     freqs = freqs.split_with_sizes([ahd // 2 - 2 * (ahd // 6), ahd // 6, ahd // 6], dim=1)
     f = freqs[0][frame_offset : frame_offset + ppf].view(ppf, 1, 1, -1).expand(ppf, pph, ppw, -1)
     h = freqs[1][:pph].view(1, pph, 1, -1).expand(ppf, pph, ppw, -1)
@@ -76,6 +82,42 @@ class WanBackbone(DiTBackbone):
             # the AdaLN time embedding (consumed in wan_perframe._condition_embedder_forward).
             inner_dim = transformer.config.num_attention_heads * transformer.config.attention_head_dim
             self.action_to_temb = torch.nn.Linear(cross_attn_dim, inner_dim)
+
+    def compile_blocks(self, *, mode: str = "default", fullgraph: bool = False,
+                       dynamic: bool | None = False) -> None:
+        """Compile the transformer-block loop for faster inference (see
+        ``wan_perframe.enable_block_compile``). No-op-safe to call once after load."""
+        from .wan_perframe import enable_block_compile
+        enable_block_compile(self.transformer, mode=mode, fullgraph=fullgraph, dynamic=dynamic)
+
+    # -- KV cache --------------------------------------------------------
+    def make_kv_cache(self, *, max_blocks: int | None = None, static: bool = False) -> KVCache:
+        """Build a rollout KV cache. ``static=True`` returns a fixed-shape ring cache
+        whose per-layer K/V are **registered-buffer submodules attached onto each
+        ``attn1``** (``attn1.kv``) -- module state the compiled block loop can track
+        and CUDA-graph can persist. Attachment is idempotent and reuses existing
+        submodules (stable buffer addresses across rollout resets), so a captured
+        graph stays valid; only the ring bookkeeping resets."""
+        if not static:
+            return KVCache(self.num_self_layers, max_blocks=max_blocks)
+        caches = self._attach_static_caches(max_blocks)
+        return KVCache(self.num_self_layers, max_blocks=max_blocks, static=True, layer_caches=caches)
+
+    def _attach_static_caches(self, max_blocks: int | None) -> list:
+        """Attach (idempotently) one :class:`StaticLayerKVCache` submodule per
+        self-attention block, in the same registration order as the processors'
+        ``layer_idx``. Returns the per-layer caches (== ``KVCache.self_attn``)."""
+        if max_blocks is None:
+            raise ValueError("static KV cache requires a finite max_kv_blocks (the attention window)")
+        caches = []
+        for module in self.transformer.modules():
+            if module.__class__.__name__ == "WanTransformerBlock":
+                kv = getattr(module.attn1, "kv", None)
+                if kv is None or kv.max_blocks != max_blocks:
+                    kv = StaticLayerKVCache(max_blocks)
+                    module.attn1.kv = kv          # registered as an nn.Module submodule
+                caches.append(kv)
+        return caches
 
     # -- constructors ----------------------------------------------------
     @classmethod
@@ -118,7 +160,7 @@ class WanBackbone(DiTBackbone):
     def _to_fchw(latents):  # [B,C,F,H,W] -> [B,F,C,H,W]
         return latents.permute(0, 2, 1, 3, 4).contiguous()
 
-    def _call(self, x_cfhw, timestep, cond):
+    def _call(self, x_cfhw, timestep, cond, static_kv=None):
         # Coerce inputs to the param dtype (rollout noise / conditioner may arrive
         # in another dtype); then, if autocast_dtype is set (fp32 master weights +
         # bf16 compute), run the heavy transformer matmuls/convs under autocast.
@@ -132,6 +174,7 @@ class WanBackbone(DiTBackbone):
             out = self.transformer(
                 hidden_states=x_cfhw, timestep=timestep,
                 encoder_hidden_states=cond, return_dict=False,
+                static_kv=static_kv,
             )
         return out[0] if isinstance(out, (tuple, list)) else out
 
@@ -224,6 +267,28 @@ class WanBackbone(DiTBackbone):
         ctx.mode = "cache"
         ctx.kv_cache = kv_cache
         ctx.commit = commit
+        # Static (fixed-shape) cache: refresh the shared validity mask + ring write
+        # position in eager mode before the (possibly compiled) transformer, keeping
+        # the block-count bookkeeping out of the compiled region, then thread them in
+        # as explicit inputs. No-op for the growing cache.
+        static_kv = None
+        if getattr(kv_cache, "static", False):
+            # Buffer dtype must match the keys the growing cache stores, so the
+            # windowed attention is numerically identical. The block-causal processor
+            # bakes RoPE with ``type_as(key)`` and qk-norm restores fp32, so the
+            # cached keys come out in the *param* dtype even under bf16 autocast (the
+            # fp32-master path) -- NOT the autocast dtype. Allocating at the param
+            # dtype keeps a pure-bf16 deploy at bf16 and the fp32-master path at fp32,
+            # both matching the dynamic cache exactly (any other choice silently
+            # rounds the cached keys -- a ~0.3% bf16 error that amplifies over the AR
+            # rollout).
+            kvd = self.transformer.patch_embedding.weight.dtype
+            tcfg = self.transformer.config
+            kv_cache.begin_forward(
+                commit=commit, block_tok=Fr * tpf,
+                num_heads=tcfg.num_attention_heads, head_dim=tcfg.attention_head_dim,
+                batch=B, device=latent_block.device, dtype=kvd)
+            static_kv = (kv_cache.attn_mask, kv_cache.write_pos, commit)
         cond = self._block_action_slice(cond, start_frame, Fr)
         cond, timestep = self._prep_action(cond, Fr=Fr, tpf=tpf, timestep=timestep)
         # offset RoPE to absolute frame positions for this block.
@@ -231,7 +296,7 @@ class WanBackbone(DiTBackbone):
         orig_forward = rope.forward
         rope.forward = lambda hs: _offset_rope(rope, hs, start_frame)  # type: ignore[assignment]
         try:
-            x = self._call(self._to_cfhw(latent_block), timestep, cond)
+            x = self._call(self._to_cfhw(latent_block), timestep, cond, static_kv=static_kv)
         finally:
             rope.forward = orig_forward  # type: ignore[assignment]
             ctx.mode = "off"

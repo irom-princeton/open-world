@@ -42,7 +42,17 @@ def causal_sdpa(
     KV-cache slot in ``"cache"`` mode.
     """
     if ctx.mode == "cache":
-        key, value = ctx.kv_cache.extend_self(layer_idx, key, value, commit=ctx.commit)
+        kv = ctx.kv_cache
+        if getattr(kv, "static", False):
+            # Fixed-shape buffer: write current -> scratch (+ ring on commit) and
+            # attend over the whole buffer with the shared validity mask, both set by
+            # KVCache.begin_forward. Constant shapes + tensor write-pos -> CUDA-graph
+            # capturable. (The real Wan rollout takes the equivalent path inside the
+            # block-causal processor, reading ``attn.kv`` directly; this branch serves
+            # the DummyDiT / op-level equivalence checks that call causal_sdpa.)
+            k_all, v_all = kv.self_attn[layer_idx].extend(key, value, ctx.commit, kv.write_pos)
+            return F.scaled_dot_product_attention(query, k_all, v_all, attn_mask=kv.attn_mask)
+        key, value = kv.extend_self(layer_idx, key, value, commit=ctx.commit)
         return F.scaled_dot_product_attention(query, key, value, attn_mask=None)
     if ctx.mode == "train":
         mask = ctx.dense_mask.to(query.device) if ctx.dense_mask is not None else None

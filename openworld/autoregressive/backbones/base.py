@@ -64,8 +64,8 @@ class DiTBackbone(nn.Module, ABC):
     ) -> torch.Tensor:                # velocity, same shape as latent_block
         ...
 
-    def make_kv_cache(self, *, max_blocks: int | None = None) -> KVCache:
-        return KVCache(self.num_self_layers, max_blocks=max_blocks)
+    def make_kv_cache(self, *, max_blocks: int | None = None, static: bool = False) -> KVCache:
+        return KVCache(self.num_self_layers, max_blocks=max_blocks, static=static)
 
     def tokens_per_frame(self, latent_h: int, latent_w: int) -> int:
         return (latent_h // self.patch_spatial) * (latent_w // self.patch_spatial)

@@ -1,4 +1,9 @@
-"""AR self-forcing on Wan2.1-1.3B, DROID ctrl-world data (3 cams, height-stacked).
+"""AR self-forcing on Wan2.1-1.3B, DROID ctrl-world data (2 cams, height-stacked).
+
+2-view is the default (1 per-clip randomly sampled side view + wrist); it trains on
+the SAME 3-view preprocessed latents (ARLatentDataset subsets at load time), so no
+re-preprocessing is needed. For the full 3-view layout use ar_wan_droid_3view.py, or
+set env NUM_CAMS=3 for a one-off (e.g. eval/replay of a 3-view checkpoint).
 
 Pipeline:
     1. sbatch bash_scripts/ar_gpu.slurm .venv/bin/python scripts/preprocess_ar_latents.py \
@@ -14,6 +19,7 @@ Geometry note: DROID episodes are ~109 RGB frames -> ~28 latent frames (Wan VAE
 
 from __future__ import annotations
 
+import os
 import torch
 
 from openworld.autoregressive.config import ARWMArgs
@@ -22,15 +28,20 @@ from openworld.autoregressive.config import ARWMArgs
 def get_args() -> ARWMArgs:
     return ARWMArgs(
         backbone="wan_1_3b",
-        backbone_ckpt="external/Wan2.1-T2V-1.3B-Diffusers",
+        backbone_ckpt=os.environ.get("BACKBONE_CKPT") or "external/Wan2.1-T2V-1.3B-Diffusers",
         tag="ar_wan_droid",
         # data
         data_format="droid_ctrl_world",
-        data_root="/scratch/gpfs/AM43/yy4041/data/droid_ctrl_world",
-        latent_root="data/droid_ar_latents",
-        # rollout geometry (DROID: 192x320, 3 cams)
-        num_cams=3,
+        data_root=os.environ.get("DATA_ROOT") or "/scratch/gpfs/AM43/yy4041/data/droid_ctrl_world",
+        latent_root=os.environ.get("LATENT_ROOT") or "data/droid_ar_latents",
+        # rollout geometry (DROID: 192x320). 2-view default (see module docstring);
+        # NUM_CAMS env or ar_wan_droid_3view.py for the full 3-view layout.
+        num_cams=2,
         multiview_layout="height_stack",
+        # per-frame cross-attn (latent frame f attends only to action token f) --
+        # the strongest action->frame binding; the DROID models are trained/inferred
+        # with it (the inference configs in configs/inference/ inherit this).
+        action_cond_mode="cross_attn_aligned",
         height=192,
         width=320,
         frames_per_block=2,
@@ -44,8 +55,8 @@ def get_args() -> ARWMArgs:
         warp_denoising_step=True,
         critic_steps_per_gen_step=5,
         real_guidance_scale=3.0,
-        student_init_ckpt="checkpoints/ar_wm/ar_wan_studentinit/checkpoint-40000.pt",
-        teacher_ckpt="checkpoints/ar_wm/ar_wan_teacher/checkpoint-40000.pt",
+        student_init_ckpt=os.environ.get("STUDENT_INIT_CKPT") or "checkpoints/ar_wm/ar_wan_studentinit/checkpoint-40000.pt",
+        teacher_ckpt=os.environ.get("TEACHER_CKPT") or "checkpoints/ar_wm/ar_wan_teacher/checkpoint-40000.pt",
         learning_rate=2e-6,
         critic_learning_rate=4e-7,
         adam_betas=(0.0, 0.999),
@@ -56,4 +67,5 @@ def get_args() -> ARWMArgs:
         mixed_precision="bf16",
         train_batch_size=1,
         max_train_steps=10_000,
+        vae_dir=os.environ.get("VAE_DIR") or "external/Wan2.1-T2V-1.3B-Diffusers",
     )

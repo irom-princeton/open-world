@@ -12,6 +12,7 @@ so the data-side fields match ``LiberoWMArgs`` field-for-field.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 import torch
@@ -26,6 +27,21 @@ import torch
 # ---------------------------------------------------------------------------
 # Valid `action_cond_mode` values (see ARWMArgs.action_cond_mode).
 ACTION_COND_MODES = ("cross_attn", "cross_attn_pe", "cross_attn_aligned", "adaln")
+
+# Valid `action_space` values (see ARWMArgs.action_space) -- the proprioceptive
+# representation that conditions the world model. Each maps to a default stats
+# file and action dimensionality (see __post_init__):
+#   "cartesian" -> 6-DoF EEF pose (xyz + axis-angle) + gripper = 7 dims, read from
+#                  the per-episode .pt "action" field, normalized with stats.json.
+#   "joint_pos" -> 7 joint positions + gripper = 8 dims, read from the
+#                  {split}_joint_actions.npy sidecar (dict ep_id -> [Lf, 8]),
+#                  normalized with stats_joint.json.
+ACTION_SPACES = ("cartesian", "joint_pos")
+# Per-space defaults derived in __post_init__ unless explicitly overridden.
+_ACTION_SPACE_DEFAULTS = {
+    "cartesian": {"stats_file": "stats.json", "action_dim": 7},
+    "joint_pos": {"stats_file": "stats_joint.json", "action_dim": 8},
+}
 
 
 BACKBONE_PRESETS: dict[str, dict] = {
@@ -189,7 +205,20 @@ class ARWMArgs:
     # "sequence_pack" is the OmniDreams layout (per-view latents + view-id embed)
     # and requires re-preprocessing the dataset to emit per-view latents.
     multiview_layout: str = "height_stack"
-    num_cams: int = 3                 # robot views to predict jointly (3 or 4)
+    # Number of camera views the model predicts jointly -- this is the single knob
+    # that selects the view mode (the rest of the geometry derives from it):
+    #   2 -> one (per-clip randomly sampled) side view + the wrist view (DEFAULT).
+    #   3 -> the full DROID layout (2 side views + wrist), all stored views.
+    # When num_cams < the number of stored views, the data path keeps the wrist
+    # camera (``wrist_view_idx``) and samples the remaining views from the side
+    # cameras, so the *same* preprocessed 3-view latents drive either mode -- no
+    # re-preprocessing needed. See openworld/autoregressive/data/views.py.
+    # Override per-process with env ``NUM_CAMS`` (see __post_init__) -- handy for a
+    # one-off 3-view eval/replay of a 3-view checkpoint without a separate config.
+    num_cams: int = 2
+    # Index of the wrist camera within the stored per-episode views (DROID order
+    # [side, side, wrist] -> 2). Always kept when subsetting to fewer views.
+    wrist_view_idx: int = 2
     width: int = 320
     height: int = 320
 
@@ -199,7 +228,17 @@ class ARWMArgs:
     rollout_blocks: int = 12          # blocks generated per self-forcing rollout (train)
     max_kv_blocks: int | None = None  # None -> unbounded; else sliding-window local attention
 
-    action_dim: int = 7              # 6 EEF (xyz + axis-angle) + 1 gripper
+    # Proprioceptive action representation the model is conditioned on. See
+    # ACTION_SPACES. "cartesian" (default) keeps the legacy 7-dim EEF conditioning
+    # and is fully backward-compatible with existing checkpoints/datasets;
+    # "joint_pos" switches to the 8-dim joint-position sidecar + stats_joint.json.
+    # Selecting a space sets `stats_file` and `action_dim` in __post_init__ unless
+    # they are explicitly overridden in the config.
+    action_space: str = "cartesian"
+    # Normalization-stats filename under latent_root. None -> derived from
+    # action_space (stats.json / stats_joint.json). Set explicitly to override.
+    stats_file: str | None = None
+    action_dim: int = 7              # 6 EEF (xyz + axis-angle) + 1 gripper; 8 for joint_pos
     text_cond: bool = True
     frame_level_cond: bool = True
 
@@ -267,8 +306,16 @@ class ARWMArgs:
         return want if want is not None and want != self.dtype else None
 
     def __post_init__(self) -> None:
-        self.output_dir = f"checkpoints/ar_wm/{self.tag}"
+        self.output_dir = os.environ.get("OUTPUT_DIR") or f"checkpoints/ar_wm/{self.tag}"
         self.wandb_run_name = self.tag
+        # Env override for a one-off view-count change (e.g. NUM_CAMS=3 to eval/replay
+        # a 3-view checkpoint) without editing or duplicating a config. num_cams does
+        # NOT change the model's parameters -- it only sets how many height-stacked
+        # views the data path feeds -- so a checkpoint loads under either value; this
+        # just has to match the views the checkpoint was trained on.
+        _num_cams_env = os.environ.get("NUM_CAMS")
+        if _num_cams_env:
+            self.num_cams = int(_num_cams_env)
         if self.backbone not in BACKBONE_PRESETS:
             raise ValueError(
                 f"Unknown backbone {self.backbone!r}; choose from {list(BACKBONE_PRESETS)}"
@@ -278,6 +325,26 @@ class ARWMArgs:
                 f"Unknown action_cond_mode {self.action_cond_mode!r}; "
                 f"choose from {list(ACTION_COND_MODES)}"
             )
+        if self.action_space not in ACTION_SPACES:
+            raise ValueError(
+                f"Unknown action_space {self.action_space!r}; "
+                f"choose from {list(ACTION_SPACES)}"
+            )
+        # Derive the per-space defaults (stats_file, action_dim). Subtlety: configs
+        # are built with ``dataclasses.replace(base, action_space="joint_pos")``, and
+        # ``base`` already ran __post_init__ -- so stats_file/action_dim arrive here
+        # carrying the PREVIOUS space's auto-derived values, not the None/7 sentinels.
+        # So we re-derive whenever the field still holds ANY space's auto-default
+        # (or None): a config that only flips action_space gets the matching file +
+        # dim, while a genuinely custom value (e.g. stats_v2.json, action_dim=10) is
+        # left untouched.
+        _sp = _ACTION_SPACE_DEFAULTS[self.action_space]
+        _auto_stats = {d["stats_file"] for d in _ACTION_SPACE_DEFAULTS.values()}
+        _auto_dims = {d["action_dim"] for d in _ACTION_SPACE_DEFAULTS.values()}
+        if self.stats_file is None or self.stats_file in _auto_stats:
+            self.stats_file = _sp["stats_file"]
+        if self.action_dim in _auto_dims:
+            self.action_dim = _sp["action_dim"]
         preset = BACKBONE_PRESETS[self.backbone]
         self.preset = preset
         # Per-camera latent shape after the backbone VAE spatial downsample.

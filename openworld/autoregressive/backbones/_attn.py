@@ -29,7 +29,8 @@ class BlockCausalWanAttnProcessor:
         self.layer_idx = layer_idx
 
     def __call__(self, attn, hidden_states, encoder_hidden_states=None,
-                 attention_mask=None, rotary_emb=None):
+                 attention_mask=None, rotary_emb=None,
+                 kv_mask=None, kv_wpos=None, kv_commit=False):
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
 
@@ -53,7 +54,18 @@ class BlockCausalWanAttnProcessor:
             query = apply_rotary_emb(query, rotary_emb)
             key = apply_rotary_emb(key, rotary_emb)
 
-        out = causal_sdpa(self.ctx, query, key, value, self.layer_idx)
+        if kv_mask is not None:
+            # Static (CUDA-graph friendly) cache: the K/V live as REGISTERED BUFFERS
+            # on the ``attn.kv`` submodule (module state -> Dynamo tracks the in-place
+            # mutation, cudagraph treats them as persistent). RoPE is already baked
+            # into ``key`` above. Write current -> scratch (+ ring on commit), then
+            # attend the whole fixed-shape buffer with the shared validity mask. Only
+            # the mask / ring write-pos / commit flag are threaded as inputs; the K/V
+            # are never copied per replay (that was the failed explicit-input path).
+            k_all, v_all = attn.kv.extend(key, value, kv_commit, kv_wpos)
+            out = F.scaled_dot_product_attention(query, k_all, v_all, attn_mask=kv_mask)
+        else:
+            out = causal_sdpa(self.ctx, query, key, value, self.layer_idx)
         out = out.transpose(1, 2).flatten(2, 3).type_as(query)
         out = attn.to_out[0](out)
         out = attn.to_out[1](out)
