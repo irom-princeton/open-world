@@ -139,20 +139,26 @@ preprocessed `.pt` episodes — only the distilled checkpoint:
 ```bash
 cd /path/to/open-world
 uv run python scripts/interactive_ar.py \
-    --config configs/inference/ar_wan_droid_2view_cartesian.py \
-    --checkpoint /path/to/<your_distilled_2view_cartesian>.pt \
+    --config configs/inference/ar_wan_droid_3view_cartesian.py \
+    --checkpoint /path/to/<your_distilled_3view_cartesian>.pt \
     --distilled --bf16 --static-cache --max-kv-blocks 8 --compile \
     --port 8000
 # pick the config whose num_cams / action_space match the checkpoint (see below)
 ```
 
 The browser shows an **"initialization (benchmark suite)"** dropdown — pick an init
-(e.g. `init_0`) and hit *reseed* to prime the world from that still, then drive. The
-example inits are **cartesian** (7-dim), so use a `*_cartesian` config + checkpoint;
-their `stats.json` (action normalization) is bundled too and loaded automatically
-when no `--latent-root` stats are present. To prime from your *own* stills, point
-`--benchmark-root` at a dir of `init_*/` subdirs, each with `exterior_left.png`,
-`exterior_right.png`, `wrist.png` + an `initialization.yaml`.
+(e.g. `init_0`) and hit *reseed* to prime the world from that still, then drive.
+
+Each init ships **all three views** (`exterior_left.png`, `exterior_right.png`,
+`wrist.png`), so the same inits work for **both 2- and 3-view** cartesian checkpoints
+— just swap `--config` between `ar_wan_droid_2view_cartesian.py` and
+`ar_wan_droid_3view_cartesian.py` (the loader subsets views by the config's
+`num_cams`, keeping the wrist + the first side views). They are **cartesian** (7-dim),
+so pair them with a `*_cartesian` config + checkpoint, **not** `jointpos`. Their
+`stats.json` (action normalization) is bundled too and loaded automatically when no
+`--latent-root` stats are present. To prime from your *own* stills, point
+`--benchmark-root` at a dir of `init_*/` subdirs, each with the three view PNGs + an
+`initialization.yaml`.
 
 ### Recommended defaults (lowest felt latency)
 
