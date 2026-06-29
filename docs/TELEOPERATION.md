@@ -110,15 +110,49 @@ Open `http://localhost:8000/` and start driving the marker with the space mouse.
   checkpoint; on a non-distilled / mid-training (studentinit) backbone it produces
   a blurry colour-wash — sample those with the many-step preview schedule instead
   (omit `--distilled`).
-- Preprocessed seed episodes + the Wan VAE on the GPU node (same assets used for
-  replay / training — see [AUTOREGRESSIVE.md](AUTOREGRESSIVE.md)). The model is
-  primed ("first frame") from one ground-truth episode, then you drive from there.
+- A way to **prime** the world (the "first frame" the model starts dreaming from).
+  Two options:
+  - **Bundled example inits (no latents to download).** A couple of still
+    initializations ship in [`assets/teleop_inits/`](../assets/teleop_inits) — per-view
+    PNGs + an `initialization.yaml` (robot pose + instruction) and the action-norm
+    `stats.json`. The server VAE-encodes a still on demand and repeats it across the
+    history block, so a **fresh clone can teleop with nothing downloaded but the
+    checkpoint**. This is the default `--benchmark-root`; see the latent-free quick
+    start below.
+  - **Preprocessed seed episodes** (the richer path): the Wan-VAE latents used for
+    replay / training (see [AUTOREGRESSIVE.md](AUTOREGRESSIVE.md)), passed via
+    `--latent-root`. The model is primed from one ground-truth episode's first
+    frames, then you drive from there.
 - On the **laptop**: a Python env with `robosuite` + `hidapi`, and the SpaceMouse
   plugged in. The client only imports `robosuite` for the device — everything else
   is Python stdlib (no torch, no GPU). See [Laptop setup](#0-laptop-setup-one-time)
   above for the exact commands.
 
 ## 1. Launch the server on the GPU node
+
+### Latent-free quick start (bundled example inits, nothing to download)
+
+The fastest way to see teleop working: prime from one of the example stills in
+`assets/teleop_inits/` (the default `--benchmark-root`). No `--latent-root`, no
+preprocessed `.pt` episodes — only the distilled checkpoint:
+
+```bash
+cd /path/to/open-world
+uv run python scripts/interactive_ar.py \
+    --config configs/inference/ar_wan_droid_2view_cartesian.py \
+    --checkpoint /path/to/<your_distilled_2view_cartesian>.pt \
+    --distilled --bf16 --static-cache --max-kv-blocks 8 --compile \
+    --port 8000
+# pick the config whose num_cams / action_space match the checkpoint (see below)
+```
+
+The browser shows an **"initialization (benchmark suite)"** dropdown — pick an init
+(e.g. `init_0`) and hit *reseed* to prime the world from that still, then drive. The
+example inits are **cartesian** (7-dim), so use a `*_cartesian` config + checkpoint;
+their `stats.json` (action normalization) is bundled too and loaded automatically
+when no `--latent-root` stats are present. To prime from your *own* stills, point
+`--benchmark-root` at a dir of `init_*/` subdirs, each with `exterior_left.png`,
+`exterior_right.png`, `wrist.png` + an `initialization.yaml`.
 
 ### Recommended defaults (lowest felt latency)
 

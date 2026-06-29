@@ -105,6 +105,7 @@ from openworld.autoregressive.infer import (
     build_preview_scheduler,
     load_action_stats,
     load_full_episode,
+    load_init_frame,
     normalize_actions,
 )
 from openworld.autoregressive.model import ARWorldModel
@@ -583,7 +584,16 @@ class Engine:
             static_cache=self._static_cache,
         )
         stats_file = getattr(self.cfg, "stats_file", None) or "stats.json"
-        self.p01, self.p99 = load_action_stats(self.cfg.latent_root, stats_file)
+        # Action-normalization percentiles. Normally these live in --latent-root next
+        # to the preprocessed episodes, but the latent-free teleop path (--benchmark-root
+        # only, no .pt episodes) falls back to a stats.json bundled with the inits so a
+        # fresh clone needs nothing downloaded -- see assets/teleop_inits/.
+        try:
+            self.p01, self.p99 = load_action_stats(self.cfg.latent_root, stats_file)
+        except (FileNotFoundError, TypeError):
+            self.p01, self.p99 = load_action_stats(args.benchmark_root, stats_file)
+            print(f"[interactive] no {stats_file} under latent-root; using the one bundled "
+                  f"with --benchmark-root ({args.benchmark_root})", flush=True)
 
         # Bound the playback buffer to ~1 block. During teleop the generator skips
         # backpressure (run()), so a larger buffer just stands full -> the displayed
@@ -606,7 +616,7 @@ class Engine:
         self._prev_action_t: float | None = None
         self._prev_consume_t: float | None = None
         self._seed_lock = threading.Lock()
-        self._pending_seed: str | None = None
+        self._pending_seed: tuple[str, str] | None = None   # (source, id): source in {droid, benchmark}
         self.cur_episode: str | None = None
         self._warmed = False               # compiled graphs warmed once at first seed
         # Prime with the model's TRAINED history depth by default. The old
@@ -637,19 +647,60 @@ class Engine:
                                      max_frames=args.record_max_frames)
             print(f"[interactive] recording trajectory to {args.record_dir}", flush=True)
 
+        # Two seed sources. (1) DROID episodes: the first frames of a preprocessed
+        # .pt clip under --latent-root (needs the latents downloaded). (2) Benchmark
+        # inits: a scenegen suite of still initializations (per-view PNGs +
+        # initialization.yaml) under --benchmark-root, VAE-encoded on demand and primed
+        # by repeating the single latent frame across the history block. The init path
+        # is latent-free -- a couple ship in assets/teleop_inits/ so a fresh clone can
+        # teleop with nothing downloaded but the model checkpoint.
+        self.benchmark_root = args.benchmark_root
         self.episodes = self._list_episodes()
-        if not self.episodes:
-            raise RuntimeError(f"no episodes under {self.cfg.latent_root}/{self.split}")
-        self._pending_seed = args.seed_episode or self.episodes[0]
+        self.inits = self._list_inits()
+        self._enc = None                       # lazily-built VaeLatentEncoder (init seeds only)
+        if self.inits:
+            print(f"[interactive] {len(self.inits)} benchmark inits under {self.benchmark_root}",
+                  flush=True)
+        if not self.episodes and not self.inits:
+            raise RuntimeError(
+                f"no seed sources: no episodes under {self.cfg.latent_root}/{self.split} "
+                f"and no benchmark inits under {self.benchmark_root}")
+        # Default seed: a DROID episode if any latents are present, else the first
+        # benchmark init (latent-free path).
+        if self.episodes:
+            self._pending_seed = ("droid", args.seed_episode or self.episodes[0])
+        else:
+            self._pending_seed = ("benchmark", args.seed_episode or self.inits[0])
 
     # -- seeding ---------------------------------------------------------
     def _list_episodes(self) -> list[str]:
+        if not self.cfg.latent_root or not os.path.isdir(os.path.join(self.cfg.latent_root, self.split)):
+            return []
         paths = sorted(glob.glob(os.path.join(self.cfg.latent_root, self.split, "*.pt")))
         return [Path(p).stem for p in paths]
 
-    def request_seed(self, ep_id: str):
+    def _list_inits(self) -> list[str]:
+        """Subdirs of the benchmark suite holding a still initialization."""
+        if not self.benchmark_root or not os.path.isdir(self.benchmark_root):
+            return []
+        out = []
+        for name in sorted(os.listdir(self.benchmark_root)):
+            d = os.path.join(self.benchmark_root, name)
+            if os.path.isdir(d) and os.path.exists(os.path.join(d, "initialization.yaml")):
+                out.append(name)
+        return out
+
+    def _encoder(self):
+        """Lazy RGB->latent encoder (reuses the decode VAE), for benchmark-init seeds."""
+        if self._enc is None:
+            from openworld.autoregressive.data.encode import VaeLatentEncoder
+            self._enc = VaeLatentEncoder(
+                self.decoder.vae, device=self._decode_device, dtype=self.decoder.dtype)
+        return self._enc
+
+    def request_seed(self, ep_id: str, source: str = "droid"):
         with self._seed_lock:
-            self._pending_seed = ep_id
+            self._pending_seed = (source, ep_id)
 
     def _do_seed(self, ep_id: str):
         self.status = "seeding"
@@ -662,12 +713,34 @@ class Engine:
         action_norm = normalize_actions(action_raw, self.p01, self.p99)
         seed_actions = action_norm[:hist_frames]
         history_latents = latent_gt[:hist_frames]
+        self._prime(history_latents, seed_actions, ep_id, text)
+
+    def _do_seed_init(self, init_id: str):
+        """Prime from a still benchmark initialization: encode the per-view PNGs to a
+        single latent frame and REPEAT it to fill the history block (no recorded
+        clip exists -- only one initial still), with the robot's initial pose as the
+        (constant) seed action."""
+        self.status = "seeding"
+        self.hub.clear()
+        init_dir = os.path.join(self.benchmark_root, init_id)
+        latent1, action_raw, text = load_init_frame(
+            init_dir, self.cfg.num_cams, self.cfg.wrist_view_idx, self._encoder(),
+            getattr(self.cfg, "action_space", "cartesian"))
+        hist_frames = self.history_blocks * self.fpb
+        history_latents = latent1.repeat(hist_frames, 1, 1, 1)   # [hist_frames, C, V*h, w]
+        a = normalize_actions(np.asarray(action_raw)[None], self.p01, self.p99)[0]
+        seed_actions = np.broadcast_to(a, (hist_frames, a.shape[0])).astype(np.float32).copy()
+        self._prime(history_latents, seed_actions, f"init:{init_id}", text)
+
+    def _prime(self, history_latents, seed_actions, ep_label: str, text: str):
+        """Shared (re)seed: prime the cache, snap to the initial frame, warm compiled
+        graphs once. Used by both DROID-episode and benchmark-init seeding."""
         rgb0 = self.roller.reset(history_latents, seed_actions)
         self.controls = Controls(seed_actions[-1], self.step_size, model_hz=self.args.model_hz)
-        self.cur_episode = ep_id
+        self.cur_episode = ep_label
         if self.recorder is not None:
-            self.recorder.meta["seed_episode"] = ep_id
-        print(f"[interactive] seeded from episode {ep_id}  ({text!r})", flush=True)
+            self.recorder.meta["seed_episode"] = ep_label
+        print(f"[interactive] seeded from {ep_label}  ({text!r})", flush=True)
         # Instant snap to the initial frame on (re)seed: show only the FINAL primed
         # frame, not the whole GT priming clip (which looked like "an action played").
         self._emit(rgb0[-1:])
@@ -731,8 +804,12 @@ class Engine:
                 pending = self._pending_seed
                 self._pending_seed = None
             if pending is not None:
+                src, pid = pending
                 try:
-                    self._do_seed(pending)
+                    if src == "benchmark":
+                        self._do_seed_init(pid)
+                    else:
+                        self._do_seed(pid)
                 except Exception as e:                  # noqa: BLE001
                     print(f"[interactive] seed failed: {e!r}", flush=True)
                     time.sleep(1.0)
@@ -869,6 +946,8 @@ def make_handler(engine: Engine):
                             **ctrl})
             elif self.path == "/episodes":
                 self._json({"episodes": engine.episodes[:500], "current": engine.cur_episode})
+            elif self.path == "/inits":
+                self._json({"inits": engine.inits[:500], "current": engine.cur_episode})
             elif self.path == "/stats":
                 # action normalization stats, so a client can den/re-normalize pose
                 # dims to do proper rotation composition (see spacemouse_client.py).
@@ -924,9 +1003,12 @@ def make_handler(engine: Engine):
             elif self.path == "/seed":
                 body = self._read_body()
                 ep = str(body.get("episode", "")).strip()
+                # source: "droid" (val-split episode, default) or "benchmark" (a
+                # still scenegen init under --benchmark-root).
+                source = str(body.get("source", "droid")).strip() or "droid"
                 if ep:
-                    engine.request_seed(ep)
-                self._json({"ok": True, "episode": ep})
+                    engine.request_seed(ep, source)
+                self._json({"ok": True, "episode": ep, "source": source})
             else:
                 self.send_error(404)
 
@@ -1061,6 +1143,12 @@ INDEX_HTML = """<!DOCTYPE html>
     <div class="hint" style="margin:0 0 6px">Pick a clip to (re)prime the world from, then reseed -- or roll a random one.</div>
     <div><select id="eps"></select> <button id="reseed">reseed</button> <button id="randseed">🎲 random</button></div>
 
+    <div id="initbench" style="display:none">
+      <h2>initialization (benchmark suite)</h2>
+      <div class="hint" style="margin:0 0 6px">Prime from a scenegen still init (single frame repeated across the history block).</div>
+      <div><select id="inits"></select> <button id="reseedinit">reseed</button> <button id="randinit">🎲 random</button></div>
+    </div>
+
     <h2>keys</h2>
     <table class="legend"><tbody>
       <tr><td><span class="kcap">W</span>/<span class="kcap">S</span></td><td>forward / back (±x)</td></tr>
@@ -1098,15 +1186,24 @@ const stepEl=document.getElementById("step");
 stepEl.addEventListener("input",()=>{document.getElementById("stepval").textContent=stepEl.value;
   fetch("/config",{method:"POST",headers:{"Content-Type":"application/json"},
   body:JSON.stringify({step:parseFloat(stepEl.value)})});});
-function doSeed(ep){fetch("/seed",{method:"POST",headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({episode:ep})});}
-document.getElementById("reseed").onclick=()=>doSeed(document.getElementById("eps").value);
+function doSeed(ep,source){fetch("/seed",{method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({episode:ep,source:source||"droid"})});}
+document.getElementById("reseed").onclick=()=>doSeed(document.getElementById("eps").value,"droid");
 document.getElementById("randseed").onclick=()=>{const s=document.getElementById("eps");
   if(!s.options.length)return; s.selectedIndex=Math.floor(Math.random()*s.options.length);
-  doSeed(s.value);};
+  doSeed(s.value,"droid");};
 fetch("/episodes").then(r=>r.json()).then(d=>{const s=document.getElementById("eps");
   d.episodes.forEach(e=>{const o=document.createElement("option");o.value=o.textContent=e;
   if(e===d.current)o.selected=true;s.appendChild(o);});});
+// second source: scenegen benchmark inits (shown only if --benchmark-root has any)
+document.getElementById("reseedinit").onclick=()=>doSeed(document.getElementById("inits").value,"benchmark");
+document.getElementById("randinit").onclick=()=>{const s=document.getElementById("inits");
+  if(!s.options.length)return; s.selectedIndex=Math.floor(Math.random()*s.options.length);
+  doSeed(s.value,"benchmark");};
+fetch("/inits").then(r=>r.json()).then(d=>{const s=document.getElementById("inits");
+  if(!d.inits||!d.inits.length)return;
+  d.inits.forEach(e=>{const o=document.createElement("option");o.value=o.textContent=e;s.appendChild(o);});
+  document.getElementById("initbench").style.display="";});
 function poll(){fetch("/state").then(r=>r.json()).then(d=>{
   // server is the source of truth for which directions are still pending/executing
   pressed=new Set(d.active||[]);optimistic.clear();
@@ -1164,6 +1261,13 @@ def main():
     p.add_argument("--latent-root", default=None, help="Override cfg.latent_root (for seed episodes).")
     p.add_argument("--split", default="val", help="Dataset split to pull seed episodes from.")
     p.add_argument("--seed-episode", default=None, help="Episode id to prime with (default: first).")
+    p.add_argument("--benchmark-root", default="assets/teleop_inits",
+                   help="Scenegen initialization suite (dir of init_*/ subdirs, each with per-view "
+                        "PNGs + initialization.yaml). Exposed as a second 'benchmark suite' dropdown; "
+                        "each init primes the world by encoding its still and repeating that single "
+                        "latent across the history block. This is the latent-free seed path -- a couple "
+                        "of example inits ship in assets/teleop_inits/ (the default), so teleop works "
+                        "from a fresh clone with no preprocessed latents. Empty/missing -> dropdown hidden.")
     p.add_argument("--history-blocks", type=int, default=-1,
                    help="GT blocks used to prime the world ('first frame'). -1 (default) uses the "
                         "model's trained cfg.num_history_blocks; priming with fewer is "

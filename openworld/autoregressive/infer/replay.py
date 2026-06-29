@@ -92,6 +92,58 @@ def load_full_episode(
     return lat.float(), action, rec.get("text", "")
 
 
+# Scenegen "initialization suite" view order. The benchmark stores one PNG per
+# view; we lay them out in DROID stored order ``[side, side, wrist]`` (wrist last)
+# so ``select_view_indices`` / the height-stack match ``load_full_episode`` exactly.
+_INIT_VIEW_FILES = ("exterior_left.png", "exterior_right.png", "wrist.png")
+_INIT_RESIZE = (320, 192)                          # (W, H) -> 24x40 latents (VAE /8)
+
+
+def load_init_frame(
+    init_dir: str, num_cams: int, wrist_view_idx: int, encoder, action_space: str = "cartesian",
+) -> tuple[torch.Tensor, np.ndarray, str]:
+    """Load a scenegen ``initialization`` directory as ONE latent frame + one action.
+
+    ``init_dir`` holds per-view PNGs (``exterior_left.png``, ``exterior_right.png``,
+    ``wrist.png``) and an ``initialization.yaml`` carrying the robot's initial_state
+    + instruction. Each view image is VAE-encoded to a single latent frame, the
+    views are subset (``num_cams``) and height-stacked exactly like
+    :func:`load_full_episode`, and the robot's initial pose becomes one raw action.
+
+    Returns ``(latent [1, C, V*h, w] fp32, action [action_dim] raw fp32, text)``.
+    The caller repeats the single latent frame to fill the model's history/init
+    block (there is no recorded clip to prime from -- only a still initialization).
+    This is the latent-free seed path: no preprocessed ``.pt`` episode required, only
+    the still PNGs (a couple of these ship in ``assets/teleop_inits/``).
+    """
+    import yaml
+    from PIL import Image
+
+    from ..data.views import select_view_indices
+
+    cams = []
+    for fn in _INIT_VIEW_FILES:
+        img = Image.open(os.path.join(init_dir, fn)).convert("RGB").resize(_INIT_RESIZE)
+        rgb = np.asarray(img, dtype=np.uint8)[None]       # [1, H, W, 3] (T=1)
+        cams.append(encoder.encode_video(rgb).float())    # [C, 1, h, w]
+    latent = torch.stack(cams, dim=0)                      # [V_stored, C, 1, h, w]
+    V_stored, C, Lf, h, w = latent.shape
+    sel = select_view_indices(V_stored, num_cams, wrist_view_idx, deterministic=True)
+    V = len(sel)
+    lat = latent[sel].permute(2, 1, 0, 3, 4).reshape(Lf, C, V * h, w).contiguous()  # [1, C, V*h, w]
+
+    with open(os.path.join(init_dir, "initialization.yaml")) as f:
+        meta = yaml.safe_load(f)
+    robot = meta["initial_state"]["robot"]
+    if action_space == "joint_pos":
+        jp = np.asarray(robot["joint_position"], dtype=np.float32).reshape(-1)[:7]
+        grip = np.asarray(robot["gripper_position"], dtype=np.float32).reshape(-1)[:1]
+        action = np.concatenate([jp, grip]).astype(np.float32)        # [8]
+    else:
+        action = np.asarray(robot["state"], dtype=np.float32).reshape(-1)[:7]  # [7]
+    return lat.float(), action, str(meta.get("instruction", ""))
+
+
 # ---------------------------------------------------------------------------
 # Replay (latent space)
 # ---------------------------------------------------------------------------
