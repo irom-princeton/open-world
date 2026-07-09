@@ -244,12 +244,15 @@ cd open-world
 .venv-teleop/bin/python scripts/spacemouse_client.py --url http://localhost:8000
 ```
 
-Translate/rotate the SpaceMouse to move the end-effector; the gripper follows the
-SpaceMouse grasp button (open = +1, closed = −1). Tune feel with `--pos-gain` /
-`--rot-gain` (normalized units per tick), `--rate` (POST Hz), and robosuite's
-`--pos-sensitivity` / `--rot-sensitivity`. Pass `--vendor-id` / `--product-id` if
-your SpaceMouse model isn't the robosuite/robocasa default. The browser keyboard
-D-pad (W/A/S/D · O/L · K/J) still works as a no-hardware fallback.
+Translate/rotate the SpaceMouse to move the end-effector. The gripper is **latching
+by default**: each grasp-button *press* toggles it open ↔ closed and it stays there
+(one click to close, another to open — no need to hold). Pass `--gripper-momentary`
+for the old hold-to-close behaviour (release = open), and `--invert-gripper` to swap
+that mapping. Tune feel with `--pos-gain` / `--rot-gain` (normalized units per tick),
+`--rate` (POST Hz), and robosuite's `--pos-sensitivity` / `--rot-sensitivity`. Pass
+`--vendor-id` / `--product-id` if your SpaceMouse model isn't the robosuite/robocasa
+default. The browser keyboard D-pad (W/A/S/D · O/L · K/J) still works as a no-hardware
+fallback.
 
 ## 4. Recorded trajectory (`--record-dir`)
 

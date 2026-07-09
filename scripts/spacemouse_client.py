@@ -213,12 +213,18 @@ def run(args, stop_event=None) -> int:
     print(f"[spacemouse] POSTing /action to {action_url} at {args.rate} Hz "
           f"(pos-gain {args.pos_gain}, rot-gain {args.rot_gain}). Ctrl-C to stop.")
 
-    # EEF-frame rotation. The pose's rotation dims (3:6) are a NORMALIZED axis-angle;
-    # adding raw SpaceMouse deltas onto them (the legacy path) isn't a valid rotation
-    # composition, so rotations feel "weird". Instead compose a real rotation in the
-    # tool frame: denormalize -> rotvec -> R, then R_new = R * dR (right-multiply =
-    # body/EEF frame), -> renormalize. Needs the action stats (/stats) + scipy; falls
-    # back to the legacy additive path if either is missing (older server / no scipy).
+    # EEF-frame rotation. The pose's rotation dims (3:6) are NORMALIZED EULER XYZ
+    # angles -- the DROID `states`/`cartesian_position_with_gripper` convention the
+    # model trains on (dp_policy.py + openpi_action_adapter.py build the conditioning
+    # 7-vector via `R.as_euler('xyz')`; DROID raw `cartesian_position` is [xyz, roll,
+    # pitch, yaw]). Treating them as an axis-angle rotvec (the previous path) isn't a
+    # valid rotation composition, so rotations felt "weird" / hard to control. Instead
+    # compose a real rotation in the tool frame: denormalize -> Euler XYZ -> R, then
+    # R_new = R * dR (right-multiply = body/EEF frame) -> back to Euler XYZ ->
+    # renormalize. The incremental SpaceMouse delta IS a genuine axis-angle
+    # (angular-velocity * dt), so `dR` stays `from_rotvec(dvec)`. Needs the action
+    # stats (/stats) + scipy; falls back to the legacy additive path if either is
+    # missing (older server / no scipy).
     rot_compose = False
     rp01 = rp99 = _np = _Rotation = None
     ROT_CAP = 0.3   # max radians per tick (guards against wild spins / loop stalls)
@@ -235,7 +241,7 @@ def run(args, stop_event=None) -> int:
             print(f"[spacemouse] EEF rotation unavailable ({e!r}); additive fallback.",
                   file=sys.stderr)
     print(f"[spacemouse] rotation mode: "
-          f"{'EEF-frame quaternion composition' if rot_compose else 'additive (legacy)'}")
+          f"{'EEF-frame Euler-XYZ composition' if rot_compose else 'additive (legacy)'}")
 
     import threading
     stop = stop_event if stop_event is not None else threading.Event()
@@ -258,6 +264,13 @@ def run(args, stop_event=None) -> int:
     t_prev = time.time()
     last_check = 0.0
     last_posted = None
+    # Gripper latch (default). Each button PRESS toggles the held open/closed state,
+    # so one click closes-and-stays, the next opens-and-stays (no hold). Start matching
+    # the synced seed pose so we don't fight it; `prev` tracks the button for rising-edge
+    # detection. --gripper-momentary opts back into hold-to-close behaviour.
+    grip_latch = not args.gripper_momentary
+    grip_latched_closed = bool(grip_idx >= 0 and len(pose) > grip_idx and pose[grip_idx] < 0.0)
+    prev_grasp_pressed = False
     while not stop.is_set():
         t0 = time.time()
         # Rate-INDEPENDENT integration. The gains are calibrated for --rate Hz, but
@@ -270,6 +283,9 @@ def run(args, stop_event=None) -> int:
         t_prev = t0
         gain_dt = dt * rate
         dpos, drot, grasp_closed, reset = src.read()
+        # Rising edge of the grasp button (press), for the gripper latch.
+        grip_press_edge = bool(grasp_closed) and not prev_grasp_pressed
+        prev_grasp_pressed = bool(grasp_closed)
 
         if reset:                                # right button -> RESET WORLD to initial obs
             # Reseed the CURRENT episode = re-prime the world from its first frame
@@ -284,6 +300,8 @@ def run(args, stop_event=None) -> int:
                     st2 = _get(state_url)
                     if isinstance(st2.get("action"), list) and st2["action"]:
                         pose = [float(v) for v in st2["action"]]
+                        if grip_idx >= 0:        # re-latch to the seed's gripper state
+                            grip_latched_closed = pose[grip_idx] < 0.0
                     print("[spacemouse] reset -> reseeded to initial observation", flush=True)
             except _NET_ERRORS:
                 pass
@@ -307,6 +325,8 @@ def run(args, stop_event=None) -> int:
                     last_episode = stp.get("episode")
                     if isinstance(stp.get("action"), list) and stp["action"]:
                         pose = [float(v) for v in stp["action"]]
+                        if grip_idx >= 0:        # re-latch to the new seed's gripper state
+                            grip_latched_closed = pose[grip_idx] < 0.0
                     print(f"[spacemouse] reseed detected -> episode {last_episode}; resynced",
                           flush=True)
                     t_prev = time.time()
@@ -326,9 +346,9 @@ def run(args, stop_event=None) -> int:
                 if ang > ROT_CAP:
                     dvec *= ROT_CAP / ang
                 rng = rp99 - rp01 + 1e-8
-                raw = (_np.array(pose[3:6], dtype=_np.float64) + 1.0) * 0.5 * rng + rp01   # denorm -> rotvec
-                R_new = _Rotation.from_rotvec(raw) * _Rotation.from_rotvec(dvec)            # R * dR = EEF frame
-                norm = _np.clip(2.0 * (R_new.as_rotvec() - rp01) / rng - 1.0, -1.0, 1.0)    # renorm
+                raw = (_np.array(pose[3:6], dtype=_np.float64) + 1.0) * 0.5 * rng + rp01   # denorm -> Euler XYZ (rad)
+                R_new = _Rotation.from_euler("xyz", raw) * _Rotation.from_rotvec(dvec)      # R * dR = EEF frame
+                norm = _np.clip(2.0 * (R_new.as_euler("xyz") - rp01) / rng - 1.0, -1.0, 1.0)  # renorm
                 pose[3], pose[4], pose[5] = float(norm[0]), float(norm[1]), float(norm[2])
         else:
             for j in range(3, min(6, dim)):
@@ -336,7 +356,17 @@ def run(args, stop_event=None) -> int:
         if grip_idx >= 0:
             # gripper is absolute: open = +1, closed = -1 (matches the repo's
             # grip_open/grip_close convention in interactive_ar.py).
-            pose[grip_idx] = -1.0 if grasp_closed else 1.0
+            if grip_latch:
+                # Latch (default): each button PRESS (rising edge) flips the held state,
+                # so one click closes-and-stays, the next opens-and-stays (no hold).
+                if grip_press_edge:
+                    grip_latched_closed = not grip_latched_closed
+                pose[grip_idx] = -1.0 if grip_latched_closed else 1.0
+            else:
+                # Momentary (--gripper-momentary): gripper follows the button hold;
+                # --invert-gripper swaps the open/closed mapping.
+                grip_closed_val, grip_open_val = (1.0, -1.0) if args.invert_gripper else (-1.0, 1.0)
+                pose[grip_idx] = grip_closed_val if grasp_closed else grip_open_val
 
         # Only POST when the pose actually changed. Re-asserting our absolute pose
         # every idle tick would overwrite a reseed initiated elsewhere (the browser
@@ -421,6 +451,12 @@ def main() -> int:
     p.add_argument("--product-id", type=hex_or_int, default=None,
                    help="SpaceMouse USB product id, decimal or 0x-hex "
                         "(default: robosuite/robocasa macros).")
+    p.add_argument("--gripper-momentary", action="store_true",
+                   help="Momentary gripper: it follows the button hold (release = open). "
+                        "Default is a latch: each press toggles open/closed and stays.")
+    p.add_argument("--invert-gripper", action="store_true",
+                   help="Swap the grasp-button mapping (open <-> closed). "
+                        "Momentary mode only (--gripper-momentary).")
     p.add_argument("--action-dim", type=int, default=7,
                    help="Fallback action dim if the server isn't seeded yet (it adopts the "
                         "server's dim once /state reports one).")

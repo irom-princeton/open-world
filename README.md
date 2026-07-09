@@ -36,7 +36,8 @@ bash external/download_models.sh
 | [Policy Training](docs/TRAIN_POLICY.md) | ✅ | ✅ | ✅ |
 | ***✨ Inference*** | | | |
 | [Trajectory Replay](docs/TRAJECTORY_REPLAY.md) | ✅ | ✅ | ❌ TODO |
-| [Policy Evaluation](docs/EVAL.md) | ✅ | ❌ TODO | ❌ TODO |
+| [Policy Evaluation](docs/EVAL.md) | ✅ | ✅ | ❌ TODO |
+| [Teleoperation](docs/TELEOPERATION.md) | ❌ TODO | ✅ | ❌ TODO |
 
 ## Acknowledgements
 
