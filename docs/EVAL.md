@@ -62,10 +62,16 @@ on the shared H200 and waits for it before starting the rollout.
 Optional overrides (forwarded to `run_evaluation.py`, no YAML edit needed):
 
 ```bash
-sbatch bash_scripts/eval_wm.sbatch --wm ar --checkpoint <ckpt.pt>
+sbatch bash_scripts/eval_wm.sbatch --wm ar --checkpoint checkpoints/ar_wm/wm_student_2view.pt
 sbatch bash_scripts/eval_wm.sbatch --wm weaver --dataset data/benchmark/0617_smoke --duration 10
 sbatch bash_scripts/eval_wm.sbatch --wm ctrlworld --config configs/evaluation/0617_ctrlworld_pi05.yaml
 ```
+
+> For the `ar` world model, `--checkpoint` takes an AR student `.pt`. The two published
+> students (`wm_student_2view.pt` / `wm_student_3view_bimanual.pt`,
+> [docs/MODELS.md](MODELS.md)) are undistilled, so the AR eval YAML must use its
+> many-step (not few-step) rollout schedule, and the eval config's geometry must match
+> the checkpoint (see `configs/inference/`).
 
 `--config <path>` · `--benchmark <name>` · `--checkpoint <path>` ·
 `--dataset <path>` · `--video-dir <path>` · `--duration <sec>` · `--port <n>`

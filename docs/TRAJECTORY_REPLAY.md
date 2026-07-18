@@ -10,21 +10,24 @@ Prime the model with the first ground-truth block(s), feed the full recorded act
 sequence open-loop, and let the student generate the rest.
 
 ```bash
-# launcher (Cosmos: bash_scripts/inference/replay_cosmos.sh):
-CKPT=checkpoints/ar_wm/ar_wan_droid/checkpoint-50000.pt \
-  sbatch bash_scripts/inference/replay_wan.sh
-
-# or the entrypoint directly:
+# published 2-view student checkpoint (see docs/MODELS.md to download it):
 sbatch bash_scripts/ar_gpu.slurm .venv/bin/python scripts/replay_ar.py \
-    --config configs/training/ar_wan_droid.py \
-    --checkpoint checkpoints/ar_wm/ar_wan_droid/checkpoint-50000.pt \
+    --config configs/inference/ar_wan_student_2view.py \
+    --checkpoint checkpoints/ar_wm/wm_student_2view.pt \
     --latent-root data/droid_ar_latents --split val \
-    --history-blocks 1 --output-dir checkpoints/ar_wm/ar_wan_droid/replay
+    --history-blocks 4 --output-dir checkpoints/ar_wm/wm_student_2view/replay
 ```
 
-- `--history-blocks` = ground-truth blocks used to prime the cache (`1` ≈ "first
-  frame only"); the rest is generated. Without `--checkpoint` the untrained backbone
-  runs (validates plumbing; video is noise).
+- Pick the `configs/inference/*` config that matches the checkpoint (see
+  [configs/inference/README.md](../configs/inference/README.md)); it pins the view
+  count, action dims, block geometry, and state-pred head the weights need. The
+  bimanual checkpoint uses `ar_wan_student_3view_bimanual.py` and its own 3-view /
+  20-dim latents.
+- These students are **undistilled**, so replay samples with the many-step preview
+  schedule automatically — do not expect the few-step distilled path here.
+- `--history-blocks` = ground-truth blocks used to prime the cache; match the
+  config's `num_history_blocks` (4 for the published students). Without `--checkpoint`
+  the untrained backbone runs (validates plumbing; video is noise).
 - Core: `openworld/autoregressive/infer/replay.py` (latent-space, decode-free,
   CPU-testable); VAE decode in `data/decode.py`.
 

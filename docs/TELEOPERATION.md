@@ -1,11 +1,19 @@
 # 🕹️ Teleoperation (SpaceMouse → AR world model)
 
-Drive a **4-step distilled** autoregressive world-model checkpoint live with a 3D
-SpaceMouse and watch it dream the robot's video in your browser. This is the
-interactive cousin of open-loop [trajectory replay](AUTOREGRESSIVE.md): instead of
-feeding a recorded action sequence, *you* steer the end-effector and the model
-generates the consequences block-by-block, keeping its KV-cache warm so each step
-is cheap.
+Drive an autoregressive world-model checkpoint live with a 3D SpaceMouse and watch
+it dream the robot's video in your browser. This is the interactive cousin of
+open-loop [trajectory replay](TRAJECTORY_REPLAY.md): instead of feeding a recorded
+action sequence, *you* steer the end-effector and the model generates the
+consequences block-by-block, keeping its KV-cache warm so each step is cheap.
+
+> **Distilled vs. undistilled checkpoints.** The examples below show the low-latency
+> **4-step distilled** deployment path (`--distilled`). The two published students
+> ([docs/MODELS.md](MODELS.md), `wm_student_2view.pt` / `wm_student_3view_bimanual.pt`)
+> are **undistilled** — run them with the many-step preview schedule by **omitting
+> `--distilled`** (it's slower per step but correct; `--distilled` on an undistilled
+> backbone is a blurry colour-wash). Everything else (tunneling, SpaceMouse client,
+> recording) is identical. Pick the `configs/inference/*` config that matches your
+> checkpoint's views / action dims / state-pred head.
 
 ## The cluster split
 
@@ -105,11 +113,11 @@ Open `http://localhost:8000/` and start driving the marker with the space mouse.
 
 ## Prerequisites
 
-- A **4-step distilled** student checkpoint (`*.pt`) and its training config. The
+- A student checkpoint (`*.pt`) and its matching `configs/inference/*` config. The
   4-step *deployment* schedule (`--distilled`) only looks right on a **distilled**
-  checkpoint; on a non-distilled / mid-training (studentinit) backbone it produces
-  a blurry colour-wash — sample those with the many-step preview schedule instead
-  (omit `--distilled`).
+  checkpoint; on a non-distilled / mid-training (studentinit) backbone — including the
+  two published students — it produces a blurry colour-wash, so **omit `--distilled`**
+  and sample with the many-step preview schedule.
 - A way to **prime** the world (the "first frame" the model starts dreaming from).
   Two options:
   - **Bundled example inits (no latents to download).** A couple of still
@@ -134,31 +142,30 @@ Open `http://localhost:8000/` and start driving the marker with the space mouse.
 
 The fastest way to see teleop working: prime from one of the example stills in
 `assets/teleop_inits/` (the default `--benchmark-root`). No `--latent-root`, no
-preprocessed `.pt` episodes — only the distilled checkpoint:
+preprocessed `.pt` episodes — only the checkpoint:
 
 ```bash
 cd /path/to/open-world
 uv run python scripts/interactive_ar.py \
-    --config configs/inference/ar_wan_droid_3view_cartesian.py \
-    --checkpoint /path/to/<your_distilled_3view_cartesian>.pt \
-    --distilled --bf16 --static-cache --max-kv-blocks 8 --compile \
+    --config configs/inference/ar_wan_student_2view.py \
+    --checkpoint checkpoints/ar_wm/wm_student_2view.pt \
+    --bf16 --static-cache --max-kv-blocks 8 --compile \
     --port 8000
-# pick the config whose num_cams / action_space match the checkpoint (see below)
+# note: no --distilled (undistilled student -> many-step preview schedule)
 ```
 
 The browser shows an **"initialization (benchmark suite)"** dropdown — pick an init
 (e.g. `init_0`) and hit *reseed* to prime the world from that still, then drive.
 
-Each init ships **all three views** (`exterior_left.png`, `exterior_right.png`,
-`wrist.png`), so the same inits work for **both 2- and 3-view** cartesian checkpoints
-— just swap `--config` between `ar_wan_droid_2view_cartesian.py` and
-`ar_wan_droid_3view_cartesian.py` (the loader subsets views by the config's
-`num_cams`, keeping the wrist + the first side views). They are **cartesian** (7-dim),
-so pair them with a `*_cartesian` config + checkpoint, **not** `jointpos`. Their
-`stats.json` (action normalization) is bundled too and loaded automatically when no
-`--latent-root` stats are present. To prime from your *own* stills, point
-`--benchmark-root` at a dir of `init_*/` subdirs, each with the three view PNGs + an
-`initialization.yaml`.
+The bundled inits are **DROID cartesian (7-dim), and ship the DROID view set**
+(`exterior_left.png`, `exterior_right.png`, `wrist.png`) — so they pair with the
+**2-view** cartesian student (`ar_wan_student_2view.py`); the loader subsets to the
+config's `num_cams` (wrist + first side). Their `stats.json` (action normalization)
+is bundled too and loaded automatically when no `--latent-root` stats are present.
+The **3-view bimanual** student (`ar_wan_student_3view_bimanual.py`) needs its own
+3-view / 20-dim initialization stills — the bundled DROID inits do not fit it. To
+prime from your own stills, point `--benchmark-root` at a dir of `init_*/` subdirs,
+each with the view PNGs + an `initialization.yaml`.
 
 ### Recommended defaults (lowest felt latency)
 
@@ -170,21 +177,22 @@ bf16 + a fused, bounded, fixed-shape attention cache — with **synchronous deco
 # on an interactive GPU node (this cluster's compute nodes are offline -> salloc)
 cd /path/to/open-world
 uv run python scripts/interactive_ar.py \
-    --config configs/inference/ar_wan_droid_3view_cartesian.py \
-    --checkpoint /path/to/<your_distilled_3view_cartesian>.pt \
+    --config configs/inference/ar_wan_student_2view.py \
+    --checkpoint checkpoints/ar_wm/wm_student_2view.pt \
     --latent-root /path/to/<preprocessed_latents> \
-    --distilled \
     --bf16 --static-cache --max-kv-blocks 8 --compile \
     --measure-latency \
     --record-dir runs/teleop/$(date +%Y%m%d_%H%M%S) \
     --port 8000
+#   no --distilled: the published students are undistilled (many-step preview schedule)
 #   add --rotate-wrist if your wrist camera is mounted inverted (display-only)
 ```
 
-Pick the `configs/inference/ar_wan_droid_{2,3}view_{cartesian,jointpos}.py` config
-whose `num_cams` / `action_space` **match how the checkpoint was trained** (see
-[configs/inference/README.md](../configs/inference/README.md)). `cartesian` (7-dim)
-and `joint_pos` (8-dim) checkpoints are not interchangeable.
+Pick the `configs/inference/*` config whose views / action dims / state-pred head
+**match how the checkpoint was trained** (see
+[configs/inference/README.md](../configs/inference/README.md)). The 2-view (7-dim),
+bimanual (20-dim), and legacy joint_pos (8-dim) checkpoints are not interchangeable.
+Pass `--distilled` only for a genuinely distilled few-step checkpoint.
 
 **What each flag does, and why these are the defaults:**
 
