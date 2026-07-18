@@ -76,6 +76,22 @@ class ARLatentDataset(Dataset):
         self.p01 = np.asarray(stat["state_01"], dtype=np.float32)
         self.p99 = np.asarray(stat["state_99"], dtype=np.float32)
 
+        # Auxiliary state-prediction target (off by default): per-frame ABSOLUTE state
+        # + its own normalization stats. The aux head predicts this while the action
+        # conditions on the commanded motion. Purely additive -- unused unless state_pred.
+        self.state_pred = getattr(cfg, "state_pred", False)
+        self.state_actions = None
+        if self.state_pred:
+            sfile = f"{split}_{getattr(cfg, 'state_pred_sidecar', 'joint_actions.npy')}"
+            spath = os.path.join(self.root, sfile)
+            if not os.path.exists(spath):
+                raise FileNotFoundError(f"state_pred=True needs {spath} (abs-state sidecar)")
+            self.state_actions = np.load(spath, allow_pickle=True).item()
+            with open(os.path.join(self.root, getattr(cfg, "state_pred_stats", "stats_joint.json"))) as f:
+                st = json.load(f)
+            self.state_p01 = np.asarray(st["state_01"], dtype=np.float32)
+            self.state_p99 = np.asarray(st["state_99"], dtype=np.float32)
+
     def __len__(self) -> int:
         return len(self.samples)
 
@@ -114,8 +130,12 @@ class ARLatentDataset(Dataset):
         lat = lat.permute(2, 1, 0, 3, 4).reshape(self.clip, C, V * h, w).contiguous()
 
         act = self._norm(action[start:end], self.p01, self.p99)
-        return {
+        out = {
             "latent": lat.float(),
             "action": torch.from_numpy(act).float(),
             "text": rec.get("text", ""),
         }
+        if self.state_pred:
+            sa = np.asarray(self.state_actions[str(s["ep_id"])], dtype=np.float32)[start:end]
+            out["state"] = torch.from_numpy(self._norm(sa, self.state_p01, self.state_p99)).float()
+        return out

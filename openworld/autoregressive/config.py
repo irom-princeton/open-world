@@ -246,6 +246,29 @@ class ARWMArgs:
     # action_space (stats.json / stats_joint.json). Set explicitly to override.
     stats_file: str | None = None
     action_dim: int = 7              # 6 EEF (xyz + axis-angle) + 1 gripper; 8 for joint_pos
+    # Auxiliary state-prediction head (WEAVER-style joint obs+state prediction, light
+    # Option-B variant): a small MLP taps the DiT's per-frame hidden features and
+    # predicts the ABSOLUTE proprioceptive state of each latent frame, supervised by an
+    # MSE term (weight `state_pred_weight`) added to the flow loss. Complements the
+    # action conditioning: the model conditions on the commanded motion and must
+    # predict the resulting absolute state, tightening the action->motion coupling.
+    # The target is a per-frame state sidecar ("{split}_<state_pred_sidecar>")
+    # normalized with `state_pred_stats`. Off by default -> no head, no behavior
+    # change; checkpoints trained WITH the head need state_pred=True (+ the matching
+    # dim) at load time or their state_head.* keys have nowhere to go.
+    state_pred: bool = False
+    state_pred_dim: int = 16                 # absolute joint pose dim (8 single-arm, 16 bimanual)
+    state_pred_weight: float = 0.1           # aux MSE weight (WEAVER uses 0.1)
+    state_pred_stats: str = "stats_joint.json"        # normalization for the state target
+    state_pred_sidecar: str = "joint_actions.npy"     # "{split}_<this>" per-frame abs state
+    # WEAVER-style context/history noise for student-init (midtrain). During causal
+    # training, add Gaussian noise (std = this) to the latents of the priming/history
+    # frames (the first `num_history_blocks*frames_per_block` frames of each clip) -- so
+    # the model learns to denoise a target block given IMPERFECT context, closing the
+    # open-loop exposure-bias gap where committed context drifts at inference. 0 -> off
+    # (unchanged behavior). WEAVER's own default is 0.0; a light 0.05-0.1 is typical.
+    # Training-time only: inference code never reads it.
+    history_noise_std: float = 0.0
     text_cond: bool = True
     frame_level_cond: bool = True
 

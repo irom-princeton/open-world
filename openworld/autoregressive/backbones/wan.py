@@ -53,7 +53,8 @@ def _offset_rope(rope, hidden_states: torch.Tensor, frame_offset: int) -> torch.
 
 class WanBackbone(DiTBackbone):
     def __init__(self, transformer, *, cross_attn_dim: int,
-                 action_mode: str = "cross_attn", action_frame_repeat: int = 1):
+                 action_mode: str = "cross_attn", action_frame_repeat: int = 1,
+                 state_pred: bool = False, state_pred_dim: int = 16):
         super().__init__()
         self.transformer = transformer
         self.in_channels = transformer.config.in_channels
@@ -82,6 +83,32 @@ class WanBackbone(DiTBackbone):
             # the AdaLN time embedding (consumed in wan_perframe._condition_embedder_forward).
             inner_dim = transformer.config.num_attention_heads * transformer.config.attention_head_dim
             self.action_to_temb = torch.nn.Linear(cross_attn_dim, inner_dim)
+
+        # -- optional auxiliary state-prediction head (off by default) ------------
+        # A small MLP over the per-frame pooled transformer feature [B, Fr, dim] that
+        # predicts the absolute proprioceptive state of each frame. `_stash_state_feat`
+        # flips on the (otherwise-absent) feature tap in wan_perframe._model_forward.
+        self.state_pred = bool(state_pred)
+        if self.state_pred:
+            inner_dim = transformer.config.num_attention_heads * transformer.config.attention_head_dim
+            self.state_head = torch.nn.Sequential(
+                torch.nn.Linear(inner_dim, inner_dim // 2), torch.nn.SiLU(),
+                torch.nn.Linear(inner_dim // 2, int(state_pred_dim)),
+            )
+            transformer._stash_state_feat = True
+
+    def predict_state(self) -> torch.Tensor:
+        """Apply the aux state head to the per-frame feature stashed by the most recent
+        forward. Returns [B, Fr, state_pred_dim]. Only valid when state_pred=True and a
+        forward has run this step."""
+        feat = getattr(self.transformer, "_state_feat", None)
+        if feat is None:
+            raise RuntimeError("predict_state() called but no _state_feat was stashed "
+                               "(state_pred disabled, or no forward ran this step)")
+        # feat comes from the bf16-autocast'd transformer forward; state_head holds the
+        # fp32 master weights and this runs OUTSIDE autocast -> cast feat to the head's
+        # dtype to avoid "mat1 and mat2 must have the same dtype" (bf16 vs fp32).
+        return self.state_head(feat.to(next(self.state_head.parameters()).dtype))
 
     def compile_blocks(self, *, mode: str = "default", fullgraph: bool = False,
                        dynamic: bool | None = False) -> None:
@@ -122,17 +149,20 @@ class WanBackbone(DiTBackbone):
     # -- constructors ----------------------------------------------------
     @classmethod
     def from_pretrained(cls, repo_or_path: str, *, cross_attn_dim: int, torch_dtype=torch.bfloat16,
-                        action_mode: str = "cross_attn", action_frame_repeat: int = 1):
+                        action_mode: str = "cross_attn", action_frame_repeat: int = 1,
+                        state_pred: bool = False, state_pred_dim: int = 16):
         from diffusers import WanTransformer3DModel
         tf = WanTransformer3DModel.from_pretrained(
             repo_or_path, subfolder="transformer", torch_dtype=torch_dtype
         )
         return cls(tf, cross_attn_dim=cross_attn_dim,
-                   action_mode=action_mode, action_frame_repeat=action_frame_repeat)
+                   action_mode=action_mode, action_frame_repeat=action_frame_repeat,
+                   state_pred=state_pred, state_pred_dim=state_pred_dim)
 
     @classmethod
     def random_init(cls, *, cross_attn_dim: int = 4096, small: bool = True,
-                    action_mode: str = "cross_attn", action_frame_repeat: int = 1):
+                    action_mode: str = "cross_attn", action_frame_repeat: int = 1,
+                    state_pred: bool = False, state_pred_dim: int = 16):
         """Build an untrained Wan transformer. ``small`` shrinks it so CPU/CI can
         instantiate it; drop ``small`` to match the real 1.3B shape."""
         from diffusers import WanTransformer3DModel
@@ -149,7 +179,8 @@ class WanBackbone(DiTBackbone):
                 ffn_dim=8960, num_layers=30, rope_max_seq_len=1024,
             )
         return cls(tf, cross_attn_dim=cross_attn_dim,
-                   action_mode=action_mode, action_frame_repeat=action_frame_repeat)
+                   action_mode=action_mode, action_frame_repeat=action_frame_repeat,
+                   state_pred=state_pred, state_pred_dim=state_pred_dim)
 
     # -- helpers ---------------------------------------------------------
     @staticmethod

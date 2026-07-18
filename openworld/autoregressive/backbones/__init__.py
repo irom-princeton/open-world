@@ -33,13 +33,17 @@ def _construct(cfg, name: str) -> DiTBackbone:
 
     if name == "wan_1_3b":
         from .wan import WanBackbone
+        state_pred = bool(getattr(cfg, "state_pred", False))
+        state_pred_dim = int(getattr(cfg, "state_pred_dim", 16))
         if cfg.random_init_backbone:
             return WanBackbone.random_init(
                 cross_attn_dim=cfg.cross_attn_dim, small=True,
-                action_mode=mode, action_frame_repeat=frame_repeat)
+                action_mode=mode, action_frame_repeat=frame_repeat,
+                state_pred=state_pred, state_pred_dim=state_pred_dim)
         return WanBackbone.from_pretrained(
             cfg.resolved_backbone_ckpt, cross_attn_dim=cfg.cross_attn_dim, torch_dtype=cfg.dtype,
             action_mode=mode, action_frame_repeat=frame_repeat,
+            state_pred=state_pred, state_pred_dim=state_pred_dim,
         )
 
     # The remaining backbones only implement the baseline cross-attn injection.

@@ -57,6 +57,15 @@ class ARWorldModel(nn.Module):
     def slice_cond_to_frames(self, cond, start_frame, num_frames):
         return self.backbone.slice_cond_to_frames(cond, start_frame, num_frames)
 
+    def predict_state(self):
+        """Aux state-prediction head output [B, Fr, state_pred_dim] from the feature
+        stashed by the most recent forward_train (state_pred configs only)."""
+        return self.backbone.predict_state()
+
+    @property
+    def state_pred(self) -> bool:
+        return getattr(self.backbone, "state_pred", False)
+
     @property
     def num_self_layers(self):
         return self.backbone.num_self_layers

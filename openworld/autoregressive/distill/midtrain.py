@@ -43,6 +43,9 @@ class DiffusionTrainer:
         max_grad_norm: float = 0.1,
         sigma_lo: float = 0.0,
         sigma_hi: float = 1.0,
+        state_pred_weight: float = 0.0,
+        history_noise_std: float = 0.0,
+        history_frames: int = 0,
     ):
         self.model = model
         self.sched = scheduler
@@ -50,6 +53,13 @@ class DiffusionTrainer:
         self.causal = causal
         self.max_grad_norm = max_grad_norm
         self.sigma_lo, self.sigma_hi = sigma_lo, sigma_hi
+        # WEAVER-style context noise: extra Gaussian added to the first `history_frames`
+        # priming frames of the (causal) clip during training. Off unless std>0.
+        self.history_noise_std = float(history_noise_std)
+        self.history_frames = int(history_frames)
+        # aux state-prediction MSE weight (0 -> disabled). last value stashed for logging.
+        self.state_pred_weight = float(state_pred_weight)
+        self._last_state_loss = 0.0
         self.opt = torch.optim.AdamW(
             model.parameters(), lr=lr, weight_decay=weight_decay, betas=betas)
 
@@ -63,7 +73,8 @@ class DiffusionTrainer:
             B * nblk, device, lo=self.sigma_lo, hi=self.sigma_hi).view(B, nblk)
         return sig_blk.repeat_interleave(self.fpb, dim=1)            # [B, Fr]
 
-    def forward_backward(self, latents: torch.Tensor, cond, *, loss_scale: float = 1.0) -> float:
+    def forward_backward(self, latents: torch.Tensor, cond, *, loss_scale: float = 1.0,
+                         state: torch.Tensor | None = None) -> float:
         """Forward + scaled backward for ONE micro-batch; grads accumulate into
         ``.grad`` (no optimizer step). One flow-matching objective on a clean clip
         ``latents`` [B, F, C, H, W]:
@@ -87,6 +98,14 @@ class DiffusionTrainer:
             sig_b = sigma_f.view(B, Fr, *([1] * (x0.ndim - 2))).to(x0.dtype)
             x_sigma = (1 - sig_b) * x0 + sig_b * eps
             t = self.sched.to_timestep(sigma_f)                     # [B, Fr] -> per-frame timestep
+            # WEAVER-style context noise: add extra Gaussian to the priming/history
+            # frames only, so the model is trained to tolerate imperfect context (the
+            # open-loop rollout condition). Leaves the flow-matching target unchanged
+            # (loss is on v_target from x0/eps). torch.cat (not in-place) for compile.
+            if self.history_noise_std > 0 and self.history_frames > 0:
+                h = min(self.history_frames, Fr)
+                hist = x_sigma[:, :h] + torch.randn_like(x_sigma[:, :h]) * self.history_noise_std
+                x_sigma = torch.cat([hist, x_sigma[:, h:]], dim=1)
         else:
             sigma = self.sched.random_sigma(B, x0.device, lo=self.sigma_lo, hi=self.sigma_hi)
             x_sigma = self.sched.add_noise(x0, eps, sigma)
@@ -95,7 +114,15 @@ class DiffusionTrainer:
             x_sigma, t, cond, frames_per_block=self.fpb, causal=self.causal)
         v_target = self.sched.velocity_target(x0, eps)
         loss = F.mse_loss(v_pred.float(), v_target.float())
-        (loss * loss_scale).backward()
+        total = loss
+        # Auxiliary state-prediction MSE (WEAVER-style, off unless weight>0 and a state
+        # target is provided). Reads the per-frame feature stashed by forward_train.
+        if state is not None and self.state_pred_weight > 0:
+            pred_state = self.model.predict_state()                # [B, Fr, state_dim]
+            state_loss = F.mse_loss(pred_state.float(), state.float())
+            total = loss + self.state_pred_weight * state_loss
+            self._last_state_loss = state_loss.item()
+        (total * loss_scale).backward()
         return loss.item()
 
     def optimizer_step(self) -> float:

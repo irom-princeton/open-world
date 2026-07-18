@@ -206,6 +206,14 @@ def _model_forward(
         for block in self.blocks:
             hidden_states = block(hidden_states, encoder_hidden_states, timestep_proj, rotary_emb, **_kv)
 
+    # Auxiliary state-prediction feature tap (WEAVER-style joint obs+state
+    # prediction): pool the transformer's per-frame hidden states over spatial tokens
+    # -> [B, Fr, D], stashed for the backbone's state head. Gated by `_stash_state_feat`
+    # so it is a no-op (and zero overhead) unless state_pred is enabled.
+    if getattr(self, "_stash_state_feat", False):
+        Fr_sf = hidden_states.shape[1] // tpf
+        self._state_feat = hidden_states.unflatten(1, (Fr_sf, tpf)).mean(dim=2)   # [B, Fr, D]
+
     # Output norm, projection & unpatchify
     if perframe:
         Fr = temb.shape[1]

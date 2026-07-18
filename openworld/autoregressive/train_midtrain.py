@@ -92,6 +92,9 @@ def main(args: ARWMArgs) -> None:
         model, sched, frames_per_block=args.frames_per_block, causal=causal,
         lr=args.midtrain_lr, weight_decay=args.midtrain_weight_decay,
         betas=args.adam_betas, max_grad_norm=args.midtrain_grad_clip,
+        state_pred_weight=(args.state_pred_weight if getattr(args, "state_pred", False) else 0.0),
+        history_noise_std=getattr(args, "history_noise_std", 0.0),
+        history_frames=args.num_history_blocks * args.frames_per_block,
     )
 
     from openworld.autoregressive.data import ARLatentDataset
@@ -131,12 +134,17 @@ def main(args: ARWMArgs) -> None:
             latent = batch["latent"].to(accelerator.device, args.dtype)   # [B, F, C, H, W]
             actions = batch["action"].to(accelerator.device, args.dtype)
             cond = model.encode_cond(actions, texts=batch.get("text"), cfg_drop=True)
-            loss_sum += trainer.forward_backward(latent, cond, loss_scale=1.0 / accum)
+            st = batch.get("state")                                        # [B, F, state_dim] or None
+            if st is not None:
+                st = st.to(accelerator.device, args.dtype)
+            loss_sum += trainer.forward_backward(latent, cond, loss_scale=1.0 / accum, state=st)
             micro += 1
             if micro < accum:
                 continue                       # keep accumulating; no step yet
             gn = trainer.optimizer_step()
             logs = {"loss": loss_sum / accum, "grad_norm": gn}
+            if trainer.state_pred_weight > 0:
+                logs["state_loss"] = trainer._last_state_loss
             loss_sum, micro = 0.0, 0
             global_step += 1
             if global_step == start_step + _WARMUP_STEPS:

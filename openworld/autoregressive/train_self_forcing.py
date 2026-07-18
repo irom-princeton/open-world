@@ -127,6 +127,12 @@ def _fsdp_shard_models(models, *, enabled: bool) -> bool:
         a2t = getattr(bb, "action_to_temb", None)
         if a2t is not None and any(p.requires_grad for p in a2t.parameters()):
             fully_shard(a2t, mesh=mesh)
+        # aux state-prediction head (also invoked via __call__, outside the transformer)
+        # -- shard it too, same reason as action_to_temb (mixed DTensor/Tensor would
+        # crash clip_grad_norm_).
+        sh = getattr(bb, "state_head", None)
+        if sh is not None and any(p.requires_grad for p in sh.parameters()):
+            fully_shard(sh, mesh=mesh)
     return True
 
 
