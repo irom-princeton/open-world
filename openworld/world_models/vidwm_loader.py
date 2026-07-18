@@ -5,7 +5,10 @@ import sys
 from typing import Optional
 
 
-DEFAULT_VIDWM_REPO = Path(__file__).resolve().parents[2]
+# The ``vidwm`` package is vendored as source under ``external/vidwm`` (it has no
+# standalone upstream — it lives in the open-world monorepo). Put that directory
+# on sys.path so ``import vidwm`` resolves to the in-repo copy.
+DEFAULT_VIDWM_REPO = Path(__file__).resolve().parents[2] / "external" / "vidwm"
 
 
 def ensure_vidwm_repo_on_path(repo_path: Optional[str] = None) -> Path:

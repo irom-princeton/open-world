@@ -1,0 +1,26 @@
+# Base: tri  (the base used by data/benchmark/0617_generated)
+#
+# Robot start state cloned verbatim into every generated initialization.yaml.
+# Pose copied from configs/scenegen/template_vid15.yaml (DROID episode 15).
+# `scene` is the default metadata.scene tag for suites built on this base.
+scene: vid15_nanobanana
+initial_state:
+  robot:
+    state_representation: cartesian_position_with_gripper
+    state:
+      - 0.36232224106788635
+      - 0.003457606304436922
+      - 0.48805975914001465
+      - -3.1367688912071245
+      - -0.013997947237584407
+      - 0.02252945824916198
+      - 0.004405309125900536
+    joint_position:
+      - -0.002586647868156433
+      - -0.6232402920722961
+      - 0.009342203848063946
+      - -2.5176877975463867
+      - 0.01114984042942524
+      - 1.9083606004714966
+      - -0.021145744249224663
+    gripper_position: 0.004405309125900536

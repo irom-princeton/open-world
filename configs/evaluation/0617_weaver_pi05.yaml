@@ -1,0 +1,52 @@
+# Policy eval on the 0617_generated benchmark: pi0.5 (pi05_droid) under WEAVER (fast,
+# 4-step). Runs in the weaver venv; pi0.5 runs out-of-process via an OpenPI websocket
+# server on 127.0.0.1:8123 (launched by bash_scripts/eval_wm.sbatch --wm weaver).
+# Policy keeps the cartesian action adapter ON so the env's robot.joint_position stays
+# correctly advanced; the weaver adapter derives 8-D joint+gripper deltas from it.
+# All code paths are in-repo: weaver source -> external/WEAVER (submodule);
+# checkpoints stay external via the checkpoints/weaver symlink.
+world_model:
+  name: weaver
+  # checkpoints/weaver -> WEAVER checkpoint dir (symlink; weights stay external).
+  checkpoint_path: checkpoints/weaver
+  params:
+    # weaver_repo defaults to the vendored external/WEAVER submodule; norm_stats
+    # default to checkpoints/weaver/norm_stats_relabel.json — both left implicit.
+    val_steps: 4
+    horizon: 8
+    bootstrap: 5
+    width: 320
+    height: 192
+    debug: true
+    debug_log_limit: 4
+policy:
+  name: openpi
+  # NOTE: no checkpoint_path -> websocket (server) mode.
+  params:
+    server_url: ws://127.0.0.1:8123
+    config_name: pi05_droid
+    repo_path: external/openpi
+    pytorch_device: cuda
+    debug: false
+    exterior_view_name: exterior_left
+    wrist_view_name: wrist
+    stacked_view_order:
+    - wrist
+    - exterior_left
+    resize_height: 224
+    resize_width: 224
+    joint_position_dim: 7
+    action_adapter_checkpoint_path: checkpoints/action_adapter/model2_15_9.pth
+    action_adapter_gripper_max: 0.75
+    intermediate_resize_height: 180
+    policy_skip_step: 2
+    num_action_steps: 5
+reward_model:
+  name: dummy
+  params: {}
+scheduler:
+  chunk_size: 5
+duration: 25
+action_hz: 5
+dataset_path: data/benchmark/0617_generated
+video_dir: outputs/0617_pi05/weaver

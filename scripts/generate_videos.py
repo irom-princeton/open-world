@@ -3,6 +3,7 @@
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 
 from openworld.datasets import Initialization, InitializationDataset
@@ -34,6 +35,42 @@ def main() -> None:
 
     cfg = load_yaml(args.config)
     config_path = Path(args.config).resolve()
+
+    # Resolve all relative I/O paths to absolute *before* building the world
+    # model. Some adapters (e.g. WEAVER) os.chdir() into their vendored repo
+    # during load_checkpoint for repo-relative assets, which would otherwise
+    # silently re-root any later relative path (dataset, video_dir, checkpoints,
+    # the openpi repo, the action adapter, ...).
+    if cfg.get("dataset_path"):
+        cfg["dataset_path"] = _resolve_dataset_path(str(config_path), cfg["dataset_path"])
+    if cfg.get("video_dir"):
+        cfg["video_dir"] = str(Path(cfg["video_dir"]).resolve())
+
+    def _abs_if_local(value):
+        """Make a relative path absolute iff it points at an existing local file/dir.
+        Leaves non-paths (config names, gs:// URLs, HF repo ids, already-absolute
+        or non-existent strings) untouched."""
+        if isinstance(value, str) and value and not os.path.isabs(value) and os.path.exists(value):
+            return str(Path(value).resolve())
+        return value
+
+    # Checkpoints + every known path-valued param, resolved up front so a later
+    # adapter chdir can't break them.
+    _PARAM_PATH_KEYS = (
+        "config_path", "stats_root", "vae_dir", "svd_model_path", "clip_model_path",
+        "norm_stats_path", "weaver_repo", "repo_path", "action_adapter_checkpoint_path",
+    )
+    for _sec in ("world_model", "policy"):
+        sec = cfg.get(_sec)
+        if not isinstance(sec, dict):
+            continue
+        if "checkpoint_path" in sec:
+            sec["checkpoint_path"] = _abs_if_local(sec["checkpoint_path"])
+        params = sec.get("params")
+        if isinstance(params, dict):
+            for k in _PARAM_PATH_KEYS:
+                if k in params:
+                    params[k] = _abs_if_local(params[k])
 
     # Build world model
     wm_cfg = cfg.get("world_model", {})

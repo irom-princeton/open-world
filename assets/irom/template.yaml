@@ -1,0 +1,26 @@
+# Base: irom  (views from open-world/data/benchmark/irom_carrot_pnp/init_2)
+#
+# Robot start state cloned verbatim into every generated initialization.yaml.
+# Pose copied from that source case's initialization.yaml.
+# `scene` is the default metadata.scene tag for suites built on this base.
+scene: irom
+initial_state:
+  robot:
+    state_representation: cartesian_position_with_gripper
+    state:
+      - 0.3564762473106384
+      - -0.026433376595377922
+      - 0.49769166111946106
+      - -3.1196913924770198
+      - 0.04084358269130339
+      - 0.000676258555729394
+      - 0.0
+    joint_position:
+      - -0.011572698131203651
+      - -0.6247846484184265
+      - -0.05499812215566635
+      - -2.480997323989868
+      - -0.012970187701284885
+      - 1.8148937225341797
+      - -0.052350450307130814
+    gripper_position: 0.0

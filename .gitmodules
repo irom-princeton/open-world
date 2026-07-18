@@ -1,0 +1,6 @@
+[submodule "external/openpi"]
+	path = external/openpi
+	url = https://github.com/tenny-yinyijun/openpi
+[submodule "external/WEAVER"]
+	path = external/WEAVER
+	url = https://github.com/arnavkj1995/WEAVER

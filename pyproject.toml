@@ -93,20 +93,14 @@ policy-dp = [
     "websockets>=13.0",
 ]
 libero = [
-    # The LIBERO simulator package itself (vendored under external/openpi,
-    # see [tool.uv.sources] below) plus only the runtime deps needed to step
-    # the env. We deliberately do NOT use LIBERO's own requirements.txt, which
-    # pins numpy==1.22.4 / torch 1.11 and would break this repo's torch/jax
-    # stack; these versions resolve cleanly against our existing pins instead.
-    "libero",
-    "robosuite==1.4.1",
-    "bddl==1.0.1",
-    "robomimic==0.2.0",
-    "easydict",
-    "thop",
-    "future",
-    "cloudpickle",
-    "gym==0.25.2",
+    # NOTE (autoregressive branch): the LIBERO *simulator* deps (libero,
+    # robosuite, bddl, robomimic, ...) and their `external/openpi/.../libero`
+    # editable source were removed from this branch. The AR world model trains
+    # and evaluates on the preprocessed latent dataset and does not step the
+    # sim, and the editable source path is not present in this clone (external/
+    # is gitignored), which otherwise breaks `uv sync`. Re-add from `main`/
+    # `libero` if you need closed-loop sim eval on this branch. Kept as a no-op
+    # marker so `uv sync --extra libero` does not error.
 ]
 policy-molmoact2 = [
     # MolmoAct2 was validated against transformers 4.57.x per its CLAUDE.md.
@@ -141,9 +135,31 @@ reward-wm = [
     # recorded trajectory. LPIPS is the reward signal, not optional.
     "lpips",
 ]
+scenegen = [
+    # `openworld.scenegen` builds test-case suites from a language instruction +
+    # an initial image. The guardrail rewrite (stage 1) calls text Gemini
+    # in-process, so google-genai is needed here; the heavy FLUX multiview stage
+    # runs out of the external/diffusers fork in a subprocess (not installed via
+    # this extra). nanobanana (inside that subprocess) also uses google-genai.
+    "google-genai",
+]
+autoregressive = [
+    # Backbone weights (Wan2.1-1.3B, Cosmos-Predict2-2B) and their causal
+    # self-forcing distillation live entirely on top of the base deps:
+    # `diffusers==0.34.0` already ships both `WanTransformer3DModel` and
+    # `CosmosTransformer3DModel`, `torch` provides `flex_attention`, and
+    # `transformers` provides the (UM)T5 text encoder. This extra only adds
+    # what those pieces need at runtime plus the test harness.
+    "sentencepiece",   # UMT5 / T5 tokenizer used by the Wan & Cosmos text encoders
+    "safetensors",     # explicit: load sharded Wan/Cosmos transformer weights
+    "pytest",          # openworld/autoregressive/tests smoke tests
+]
 
 [tool.setuptools.packages.find]
-include = ["openworld*"]
+# vidwm* is included so the action encoder it provides imports when the package
+# is installed (not only when cwd happens to be the repo root); the AR
+# conditioner depends on it.
+include = ["openworld*", "vidwm*"]
 
 [tool.uv]
 conflicts = [
@@ -153,14 +169,6 @@ conflicts = [
         { extra = "policy-molmoact2" },
     ],
     [
-        # LIBERO pins gym==0.25.2, policy-dp pins gym==0.22.0; they can't be
-        # installed together. LIBERO is collected/evaluated with the openpi
-        # policy (policy-openpi), not the diffusion-policy backend, so this
-        # mutual exclusion is harmless.
-        { extra = "policy-dp" },
-        { extra = "libero" },
-    ],
-    [
         { extra = "reward-robometer" },
         { extra = "reward-topreward" },
     ],
@@ -168,15 +176,9 @@ conflicts = [
 
 [tool.uv.sources]
 lerobot = { git = "https://github.com/huggingface/lerobot", rev = "0cf864870cf29f4738d3ade893e6fd13fbd7cdb5" }
-# LIBERO must be installed *editable*: its `libero/` package ships no
-# __init__.py (implicit namespace package), so the find_packages() in its
-# setup.py builds an empty wheel — a normal (git/sdist) install yields no
-# modules. Editable mode puts the source tree on sys.path so the namespace
-# package imports. The source is openpi's vendored submodule; populate it once
-# with `git -C external/openpi submodule update --init third_party/libero`.
-# setup.py declares no install_requires, so its runtime deps are pinned in the
-# `libero` extra above.
-libero = { path = "external/openpi/third_party/libero", editable = true }
+# NOTE (autoregressive branch): the `libero` editable source
+# (external/openpi/third_party/libero) was removed here — that path is not
+# present in this clone and would abort `uv sync`. See the `libero` extra above.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
