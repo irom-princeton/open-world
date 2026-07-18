@@ -52,6 +52,21 @@ def load_joint_actions(latent_root: str, split: str) -> dict:
     return np.load(path, allow_pickle=True).item()
 
 
+_ALIGNED_ACTIONS_CACHE: dict = {}
+
+
+def load_aligned_actions(latent_root: str, split: str) -> dict | None:
+    """The center-aligned cartesian action sidecar (dict ep_id -> [Lf, D]) if present,
+    else None. Cached per (root, split) so per-episode eval doesn't reload it. Mirrors
+    ARLatentDataset so previews/eval use the SAME conditioning the training data does."""
+    key = (latent_root, split)
+    if key not in _ALIGNED_ACTIONS_CACHE:
+        path = os.path.join(latent_root, f"{split}_actions_aligned.npy")
+        _ALIGNED_ACTIONS_CACHE[key] = (
+            np.load(path, allow_pickle=True).item() if os.path.exists(path) else None)
+    return _ALIGNED_ACTIONS_CACHE[key]
+
+
 def normalize_actions(action: np.ndarray, p01: np.ndarray, p99: np.ndarray, eps: float = 1e-8) -> np.ndarray:
     """Normalize raw actions to [-1, 1] exactly as ``ARLatentDataset`` does."""
     return np.clip(2 * (action - p01) / (p99 - p01 + eps) - 1, -1, 1).astype(np.float32)
@@ -72,6 +87,11 @@ def load_full_episode(
     When ``joint_actions`` (a preloaded ``{split}_joint_actions.npy`` dict) is
     given, the 8-dim joint action for ``ep_id`` is returned instead of the .pt's
     cartesian ``action`` -- matching ``action_space='joint_pos'`` training.
+
+    For the cartesian path, if a ``{split}_actions_aligned.npy`` sidecar exists
+    (VAE temporal-group-center re-alignment) its action supersedes the .pt's baked
+    ``action``, mirroring ARLatentDataset so eval/previews match the re-aligned
+    training data.
     """
     from ..data.views import select_view_indices
 
@@ -82,7 +102,11 @@ def load_full_episode(
             raise KeyError(f"ep_id {ep_id!r} missing from {split}_joint_actions.npy")
         action = np.asarray(joint_actions[str(ep_id)], dtype=np.float32)  # [Lf, 8]
     else:
-        action = rec["action"].numpy()             # [Lf, action_dim]
+        aligned = load_aligned_actions(latent_root, split)
+        if aligned is not None and str(ep_id) in aligned:
+            action = np.asarray(aligned[str(ep_id)], dtype=np.float32)    # [Lf, D] center-aligned
+        else:
+            action = rec["action"].numpy()         # [Lf, action_dim]
     V_stored, C, Lf, h, w = latent.shape
     # An explicit view_indices pins the exact subset (must match training); else
     # fall back to the num_cams wrist+side selection. Single source of truth with

@@ -76,6 +76,18 @@ class ARLatentDataset(Dataset):
         self.p01 = np.asarray(stat["state_01"], dtype=np.float32)
         self.p99 = np.asarray(stat["state_99"], dtype=np.float32)
 
+        # Center-aligned cartesian action sidecar (supersedes the .pt's baked "action"
+        # so the latents don't need rewriting): "{split}_actions_aligned.npy",
+        # ep_id -> [Lf, action_dim] poses sampled at the VAE temporal-group CENTER
+        # (see data/encode.py align_actions_to_latent). Optional -- absent means the
+        # .pt actions are used as-is.
+        self.aligned_actions = None
+        apath = os.path.join(self.root, f"{split}_actions_aligned.npy")
+        if os.path.exists(apath):
+            self.aligned_actions = np.load(apath, allow_pickle=True).item()
+            print(f"[ARLatentDataset {split}] using center-aligned action sidecar "
+                  f"({len(self.aligned_actions)} eps) from {split}_actions_aligned.npy")
+
         # Auxiliary state-prediction target (off by default): per-frame ABSOLUTE state
         # + its own normalization stats. The aux head predicts this while the action
         # conditions on the commanded motion. Purely additive -- unused unless state_pred.
@@ -103,7 +115,10 @@ class ARLatentDataset(Dataset):
         s = self.samples[index]
         rec = torch.load(os.path.join(self.root, self.split, f"{s['ep_id']}.pt"), weights_only=False)
         latent = rec["latent"].float()           # [V,16,Lf,h,w]
-        action = rec["action"].numpy()           # [Lf,7]
+        if self.aligned_actions is not None and str(s["ep_id"]) in self.aligned_actions:
+            action = np.asarray(self.aligned_actions[str(s["ep_id"])], dtype=np.float32)  # [Lf,D] center-aligned
+        else:
+            action = rec["action"].numpy()       # [Lf,7]
         V_stored, C, Lf, h, w = latent.shape
         # Subset the stored cameras. An explicit ``view_indices`` pins an exact
         # heterogeneous subset (fixed for train+val); otherwise fall back to the

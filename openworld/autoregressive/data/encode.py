@@ -47,10 +47,23 @@ class VaeLatentEncoder:
 
 def align_actions_to_latent(actions: np.ndarray, num_latent_frames: int) -> np.ndarray:
     """Subsample a per-RGB-frame action sequence ``[T, A]`` to one action per
-    latent frame ``[Lf, A]`` by a linear time map (robust to the VAE's exact
-    frame bookkeeping)."""
+    latent frame ``[Lf, A]``.
+
+    The Wan VAE compresses time 4x: latent frame ``i>0`` is decoded from the RGB
+    group ``{4i-3 .. 4i}`` whose visual centroid sits at ``4i-1.5``. A naive
+    ``round(linspace(0, T-1, Lf))`` maps latent ``i`` to RGB frame ``4i`` -- the
+    *last* frame of that group -- so the conditioning pose *leads* the imagery it
+    controls by ~1.4 frames (confirmed empirically). We instead sample the group
+    *center* index (``4i -> 4i-1``), which removes the systematic lead. Latent frame 0 maps
+    to RGB frame 0 (no preceding group). We pick the center *index* rather than
+    averaging over the group because Euler-XYZ angles cannot be averaged safely
+    across the +/-pi wrap.
+    """
     T = actions.shape[0]
     if num_latent_frames <= 1:
         return actions[:1]
-    idx = np.round(np.linspace(0, T - 1, num_latent_frames)).astype(int)
+    last = np.round(np.linspace(0, T - 1, num_latent_frames)).astype(int)  # [0, ~4, ~8, ...]
+    f = int(last[1])                                                       # temporal factor (~4)
+    idx = last.copy()
+    idx[1:] = np.clip(last[1:] - (f - 1) // 2, 0, T - 1)                   # 4i -> 4i-1 (group center)
     return actions[idx]
