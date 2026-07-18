@@ -110,6 +110,15 @@ def main(args: ARWMArgs) -> None:
         global_step = _restore_one(resume_path, model, trainer.opt, distributed)
         logger.info(f"RESUMED from {resume_path} at step {global_step}")
 
+    # Gradient accumulation: do `accum` micro-batches per optimizer step, so the
+    # effective batch is train_batch_size * accum * world_size. global_step counts
+    # optimizer steps (so max_train_steps / checkpointing are update-based). Grads
+    # accumulate in `.grad` across micro-batches (FSDP reduce-scatters each one);
+    # the 1/accum loss scale keeps the update identical to a true batch `accum`x
+    # larger -- this model has no cross-sample ops, so it matches exactly.
+    accum = max(1, args.gradient_accumulation_steps)
+    loss_sum, micro = 0.0, 0
+
     keeper = _CheckpointKeeper(args.output_dir, args.checkpointing_steps, args.permanent_checkpoint_steps)
     previewer = _SamplePreviewer(args, is_main=accelerator.is_main_process)  # no-op if log_samples off
     t_start, t_warm, start_step = time.monotonic(), None, global_step
@@ -122,7 +131,13 @@ def main(args: ARWMArgs) -> None:
             latent = batch["latent"].to(accelerator.device, args.dtype)   # [B, F, C, H, W]
             actions = batch["action"].to(accelerator.device, args.dtype)
             cond = model.encode_cond(actions, texts=batch.get("text"), cfg_drop=True)
-            logs = trainer.train_step(latent, cond)
+            loss_sum += trainer.forward_backward(latent, cond, loss_scale=1.0 / accum)
+            micro += 1
+            if micro < accum:
+                continue                       # keep accumulating; no step yet
+            gn = trainer.optimizer_step()
+            logs = {"loss": loss_sum / accum, "grad_norm": gn}
+            loss_sum, micro = 0.0, 0
             global_step += 1
             if global_step == start_step + _WARMUP_STEPS:
                 t_warm = time.monotonic()

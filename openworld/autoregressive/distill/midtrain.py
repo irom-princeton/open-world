@@ -63,14 +63,22 @@ class DiffusionTrainer:
             B * nblk, device, lo=self.sigma_lo, hi=self.sigma_hi).view(B, nblk)
         return sig_blk.repeat_interleave(self.fpb, dim=1)            # [B, Fr]
 
-    def train_step(self, latents: torch.Tensor, cond) -> dict:
-        """One flow-matching step on a clean clip ``latents`` [B, F, C, H, W].
+    def forward_backward(self, latents: torch.Tensor, cond, *, loss_scale: float = 1.0) -> float:
+        """Forward + scaled backward for ONE micro-batch; grads accumulate into
+        ``.grad`` (no optimizer step). One flow-matching objective on a clean clip
+        ``latents`` [B, F, C, H, W]:
 
         * causal (student-init): **diffusion forcing** -- an independent noise
           level per block, so the model learns to denoise a noisy block given
           cleaner context (the autoregressive rollout condition).
         * bidirectional (teacher): one noise level for the whole clip (standard
-          video diffusion; ``consistent_noise``)."""
+          video diffusion; ``consistent_noise``).
+
+        ``loss_scale`` should be ``1 / accum_steps``: micro-batches are equal-size
+        and the loss is a per-element mean, so averaging ``accum_steps`` scaled
+        backwards makes the accumulated gradient identical to a true batch that
+        many times larger (FSDP then means across ranks). Returns the *unscaled*
+        loss for logging."""
         x0 = latents
         B, Fr = x0.shape[0], x0.shape[1]
         eps = torch.randn_like(x0)
@@ -87,8 +95,19 @@ class DiffusionTrainer:
             x_sigma, t, cond, frames_per_block=self.fpb, causal=self.causal)
         v_target = self.sched.velocity_target(x0, eps)
         loss = F.mse_loss(v_pred.float(), v_target.float())
-        self.opt.zero_grad()
-        loss.backward()
+        (loss * loss_scale).backward()
+        return loss.item()
+
+    def optimizer_step(self) -> float:
+        """Clip, step, and zero grads. Call once per ``accum_steps`` calls to
+        ``forward_backward``. Returns the grad-norm."""
         gn = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
         self.opt.step()
-        return {"loss": loss.item(), "grad_norm": float(gn)}
+        self.opt.zero_grad(set_to_none=True)
+        return float(gn)
+
+    def train_step(self, latents: torch.Tensor, cond) -> dict:
+        """Single-step (no accumulation): one micro-batch == one optimizer step."""
+        loss = self.forward_backward(latents, cond, loss_scale=1.0)
+        gn = self.optimizer_step()
+        return {"loss": loss, "grad_norm": gn}
