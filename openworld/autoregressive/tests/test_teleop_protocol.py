@@ -82,6 +82,7 @@ def _run_dummy_against_stub(start_action, *, pos_gain=0.02, duration=1.0, rate=5
         vendor_id=None, product_id=None, action_dim=7, max_errors=200, verbose=False,
         latency=False, latency_interval=2.0,
         invert_x=False, invert_y=False, invert_z=False,
+        gripper_momentary=False, invert_gripper=False,
     )
     stop = threading.Event()
     client = threading.Thread(target=smc.run, args=(args, stop), daemon=True)
@@ -147,6 +148,7 @@ def test_marker_env_end_to_end():
         vendor_id=None, product_id=None, action_dim=7, max_errors=200,
         verbose=False, latency=False, latency_interval=2.0,
         invert_x=False, invert_y=False, invert_z=False,
+        gripper_momentary=False, invert_gripper=False,
     )
     stop = threading.Event()
     client = threading.Thread(target=smc.run, args=(args, stop), daemon=True)
@@ -173,8 +175,68 @@ def test_marker_env_end_to_end():
         httpd.shutdown()
 
 
+# --- EEF rotation composition (Euler-XYZ, not axis-angle) -------------------
+# DROID `states` rotation dims are Euler XYZ (identical action stats to Ctrl-World,
+# which builds the 7-vector via `R.as_euler('xyz')`). The teleop client must compose
+# tool-frame rotations in that convention; the old code mis-read them as a rotvec.
+import numpy as np  # noqa: E402
+
+# rotation-dim (3:6) percentiles from the DROID stats.json
+_RP01 = np.array([-3.137540817260742, -1.2128199338912964, -2.1515519618988037])
+_RP99 = np.array([3.1375579833984375, 0.9004266262054443, 1.9337313175201416])
+
+
+def _renorm(euler):
+    rng = _RP99 - _RP01 + 1e-8
+    return np.clip(2.0 * (np.asarray(euler) - _RP01) / rng - 1.0, -1.0, 1.0)
+
+
+def _denorm(norm):
+    rng = _RP99 - _RP01 + 1e-8
+    return (np.asarray(norm) + 1.0) * 0.5 * rng + _RP01
+
+
+def test_rot_compose_zero_delta_is_noop():
+    # a negligible delta returns None so the caller keeps the current pose
+    n0 = _renorm([0.5, -0.3, 0.7])
+    assert smc.compose_eef_rotation_euler(n0, [0.0, 0.0, 0.0], _RP01, _RP99) is None
+
+
+def test_rot_compose_realizes_commanded_tool_rotation():
+    from scipy.spatial.transform import Rotation as R
+
+    # several in-range Euler poses; a known tool-frame delta must be realized exactly
+    for e0 in ([3.10, -0.10, 0.20], [0.0, 0.0, 0.0], [-2.0, 0.5, 1.0]):
+        n0 = _renorm(e0)
+        dvec = np.array([0.05, -0.12, 0.15])  # tool-frame axis-angle (rad), below ROT_CAP
+        n1 = smc.compose_eef_rotation_euler(n0, dvec, _RP01, _RP99)
+        R0 = R.from_euler("xyz", _denorm(n0))
+        R1 = R.from_euler("xyz", _denorm(n1))
+        realized = (R0.inv() * R1).as_rotvec()  # relative rotation in the body frame
+        assert np.allclose(realized, dvec, atol=1e-6), (e0, realized, dvec)
+
+
+def test_rot_compose_reads_pose_as_euler_not_rotvec():
+    # regression: the stored pose must be decoded as Euler XYZ. A rotvec reading of
+    # the same numbers yields a materially different orientation, so a tiny delta
+    # composed under the correct (Euler) convention must land near the Euler pose,
+    # not near the rotvec misinterpretation.
+    from scipy.spatial.transform import Rotation as R
+
+    e0 = np.array([3.10, -0.10, 0.20])
+    n0 = _renorm(e0)
+    n1 = smc.compose_eef_rotation_euler(n0, [1e-4, 0.0, 0.0], _RP01, _RP99)
+    out = R.from_euler("xyz", _denorm(n1))
+    d_euler = np.linalg.norm((R.from_euler("xyz", e0).inv() * out).as_rotvec())
+    d_rotvec = np.linalg.norm((R.from_rotvec(e0).inv() * out).as_rotvec())
+    assert d_euler < d_rotvec, (d_euler, d_rotvec)
+
+
 if __name__ == "__main__":
     test_sync_clip_and_integrate()
     test_clipping_saturates()
     test_marker_env_end_to_end()
+    test_rot_compose_zero_delta_is_noop()
+    test_rot_compose_realizes_commanded_tool_rotation()
+    test_rot_compose_reads_pose_as_euler_not_rotvec()
     print("teleop protocol smoke OK")

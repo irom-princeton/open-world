@@ -38,6 +38,35 @@ import urllib.error
 import urllib.request
 
 
+def compose_eef_rotation_euler(pose_rot_norm, dvec, rp01, rp99, *, rot_cap=0.3):
+    """Compose an incremental tool-frame rotation onto a normalized Euler-XYZ pose.
+
+    ``pose_rot_norm``: the 3 rotation dims of the action, normalized to [-1, 1]
+    against ``[rp01, rp99]``. These are Euler-XYZ angles -- the DROID ``states``
+    convention the world model trains on (Ctrl-World builds the same 7-vector via
+    ``R.as_euler('xyz')``); treating them as an axis-angle rotvec here is the bug
+    this replaces. ``dvec``: the raw SpaceMouse angular delta, which *is* a genuine
+    axis-angle (angular-velocity * dt), so it stays ``from_rotvec``. Right-multiply
+    (``R * dR``) applies the delta in the body/EEF frame. Returns the new normalized
+    Euler-XYZ triple, or ``None`` when the delta is negligible (caller keeps the pose).
+    """
+    import numpy as np
+    from scipy.spatial.transform import Rotation as R
+
+    dvec = np.asarray(dvec, dtype=np.float64)
+    ang = float(np.linalg.norm(dvec))
+    if ang <= 1e-6:
+        return None
+    if ang > rot_cap:                       # guard wild spins / loop stalls
+        dvec = dvec * (rot_cap / ang)
+    rp01 = np.asarray(rp01, dtype=np.float64)
+    rp99 = np.asarray(rp99, dtype=np.float64)
+    rng = rp99 - rp01 + 1e-8
+    raw = (np.asarray(pose_rot_norm, dtype=np.float64) + 1.0) * 0.5 * rng + rp01  # denorm -> Euler XYZ (rad)
+    R_new = R.from_euler("xyz", raw) * R.from_rotvec(dvec)                        # R * dR = tool/EEF frame
+    return np.clip(2.0 * (R_new.as_euler("xyz") - rp01) / rng - 1.0, -1.0, 1.0)   # -> Euler XYZ -> renorm
+
+
 # --------------------------------------------------------------------------- #
 # HTTP helpers (stdlib only -- no requests, so any laptop python can run this)
 # --------------------------------------------------------------------------- #
@@ -226,12 +255,12 @@ def run(args, stop_event=None) -> int:
     # stats (/stats) + scipy; falls back to the legacy additive path if either is
     # missing (older server / no scipy).
     rot_compose = False
-    rp01 = rp99 = _np = _Rotation = None
+    rp01 = rp99 = None
     ROT_CAP = 0.3   # max radians per tick (guards against wild spins / loop stalls)
     if dim >= 7:
         try:
             import numpy as _np
-            from scipy.spatial.transform import Rotation as _Rotation
+            import scipy.spatial.transform  # noqa: F401  (compose helper needs it later)
             stt = _get(args.url.rstrip("/") + "/stats")
             if stt.get("action_space", "cartesian") == "cartesian" and stt.get("p01"):
                 rp01 = _np.asarray(stt["p01"], dtype=_np.float64)[3:6]
@@ -338,17 +367,13 @@ def run(args, stop_event=None) -> int:
         for i in range(min(3, dim)):
             pose[i] = clamp(pose[i] + args.pos_gain * pos_sign[i] * float(dpos[i]) * gain_dt)
         if rot_compose:
-            # tool-frame rotation: compose dR onto the current EEF orientation
-            dvec = _np.array([float(drot[0]), float(drot[1]), float(drot[2])],
-                             dtype=_np.float64) * (args.rot_gain * gain_dt)   # radians
-            ang = float(_np.linalg.norm(dvec))
-            if ang > 1e-6:
-                if ang > ROT_CAP:
-                    dvec *= ROT_CAP / ang
-                rng = rp99 - rp01 + 1e-8
-                raw = (_np.array(pose[3:6], dtype=_np.float64) + 1.0) * 0.5 * rng + rp01   # denorm -> Euler XYZ (rad)
-                R_new = _Rotation.from_euler("xyz", raw) * _Rotation.from_rotvec(dvec)      # R * dR = EEF frame
-                norm = _np.clip(2.0 * (R_new.as_euler("xyz") - rp01) / rng - 1.0, -1.0, 1.0)  # renorm
+            # tool-frame rotation: compose the raw SpaceMouse delta (axis-angle) onto
+            # the current Euler-XYZ EEF orientation (see compose_eef_rotation_euler).
+            dvec = [float(drot[0]) * args.rot_gain * gain_dt,
+                    float(drot[1]) * args.rot_gain * gain_dt,
+                    float(drot[2]) * args.rot_gain * gain_dt]
+            norm = compose_eef_rotation_euler(pose[3:6], dvec, rp01, rp99, rot_cap=ROT_CAP)
+            if norm is not None:
                 pose[3], pose[4], pose[5] = float(norm[0]), float(norm[1]), float(norm[2])
         else:
             for j in range(3, min(6, dim)):
