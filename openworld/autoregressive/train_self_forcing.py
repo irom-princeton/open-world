@@ -311,7 +311,8 @@ class _SamplePreviewer:
         try:
             for ep_id in picks:
                 latent_gt, action_raw, text = load_full_episode(
-                    a.latent_root, "val", ep_id, a.num_cams)
+                    a.latent_root, "val", ep_id, a.num_cams,
+                    view_indices=getattr(a, "view_indices", None))
                 # identical guard on every rank -> consistent control flow / collectives
                 if latent_gt.shape[0] < hist_min:
                     continue

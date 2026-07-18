@@ -219,6 +219,13 @@ class ARWMArgs:
     # Index of the wrist camera within the stored per-episode views (DROID order
     # [side, side, wrist] -> 2). Always kept when subsetting to fewer views.
     wrist_view_idx: int = 2
+    # Explicit stored-view indices to use, overriding the num_cams side-sampling in
+    # views.py. When set, EXACTLY these stored views are used, in this order, for
+    # both train and val (no random side sampling), and num_cams is forced to their
+    # count in __post_init__. Use for a fixed heterogeneous subset the single-wrist
+    # select_view_indices can't express -- e.g. bimanual [scene, wrist_l, wrist_r].
+    # Env override: VIEW_INDICES="1,2,3". None -> legacy num_cams behaviour.
+    view_indices: tuple[int, ...] | None = None
     width: int = 320
     height: int = 320
 
@@ -316,6 +323,14 @@ class ARWMArgs:
         _num_cams_env = os.environ.get("NUM_CAMS")
         if _num_cams_env:
             self.num_cams = int(_num_cams_env)
+        # Explicit view subset (config field or VIEW_INDICES env) pins the stored
+        # views and forces num_cams to match, so all downstream geometry is correct.
+        _vi_env = os.environ.get("VIEW_INDICES")
+        if _vi_env:
+            self.view_indices = tuple(int(x) for x in _vi_env.replace(" ", "").split(",") if x != "")
+        if self.view_indices is not None:
+            self.view_indices = tuple(int(x) for x in self.view_indices)
+            self.num_cams = len(self.view_indices)
         if self.backbone not in BACKBONE_PRESETS:
             raise ValueError(
                 f"Unknown backbone {self.backbone!r}; choose from {list(BACKBONE_PRESETS)}"

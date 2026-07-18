@@ -706,7 +706,8 @@ class Engine:
         self.status = "seeding"
         self.hub.clear()                      # drop old-episode frames so reseed paints cleanly
         latent_gt, action_raw, text = load_full_episode(
-            self.cfg.latent_root, self.split, ep_id, self.cfg.num_cams, self.cfg.wrist_view_idx)
+            self.cfg.latent_root, self.split, ep_id, self.cfg.num_cams, self.cfg.wrist_view_idx,
+            view_indices=getattr(self.cfg, "view_indices", None))
         hist_frames = self.history_blocks * self.fpb
         if latent_gt.shape[0] < hist_frames:
             raise RuntimeError(f"episode {ep_id} too short ({latent_gt.shape[0]} < {hist_frames})")
@@ -725,7 +726,8 @@ class Engine:
         init_dir = os.path.join(self.benchmark_root, init_id)
         latent1, action_raw, text = load_init_frame(
             init_dir, self.cfg.num_cams, self.cfg.wrist_view_idx, self._encoder(),
-            getattr(self.cfg, "action_space", "cartesian"))
+            getattr(self.cfg, "action_space", "cartesian"),
+            view_indices=getattr(self.cfg, "view_indices", None))
         hist_frames = self.history_blocks * self.fpb
         history_latents = latent1.repeat(hist_frames, 1, 1, 1)   # [hist_frames, C, V*h, w]
         a = normalize_actions(np.asarray(action_raw)[None], self.p01, self.p99)[0]

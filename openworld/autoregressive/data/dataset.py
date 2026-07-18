@@ -24,6 +24,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from .views import select_view_indices
+
 
 def _load_sample_list(root: str, split: str) -> list[dict]:
     """Read the episode index for ``split``.
@@ -86,12 +88,28 @@ class ARLatentDataset(Dataset):
         rec = torch.load(os.path.join(self.root, self.split, f"{s['ep_id']}.pt"), weights_only=False)
         latent = rec["latent"].float()           # [V,16,Lf,h,w]
         action = rec["action"].numpy()           # [Lf,7]
-        V, C, Lf, h, w = latent.shape
-        V = min(V, self.num_cams)
+        V_stored, C, Lf, h, w = latent.shape
+        # Subset the stored cameras. An explicit ``view_indices`` pins an exact
+        # heterogeneous subset (fixed for train+val); otherwise fall back to the
+        # num_cams side-sampling (keep wrist + sample sides, random per clip while
+        # training, fixed for val so previews are stable).
+        vi = getattr(self.cfg, "view_indices", None)
+        if vi:
+            if max(vi) >= V_stored:
+                raise ValueError(
+                    f"ep {s['ep_id']}: view_indices {tuple(vi)} exceed stored views {V_stored}"
+                )
+            sel = list(vi)
+        else:
+            sel = select_view_indices(
+                V_stored, self.num_cams, self.cfg.wrist_view_idx,
+                deterministic=(self.split != "train"),
+            )
+        V = len(sel)
 
         start = random.randint(0, Lf - self.clip)
         end = start + self.clip
-        lat = latent[:V, :, start:end]           # [V,16,L,h,w]
+        lat = latent[sel][:, :, start:end]       # [V,16,L,h,w]
         # height-stack cameras: [V,16,L,h,w] -> [L,16,V*h,w]
         lat = lat.permute(2, 1, 0, 3, 4).reshape(self.clip, C, V * h, w).contiguous()
 

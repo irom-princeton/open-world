@@ -86,7 +86,7 @@ def main():
     if ep is None:
         import os
         ep = sorted(f[:-3] for f in os.listdir(Path(cfg.latent_root) / "val") if f.endswith(".pt"))[0]
-    latent_gt, action_raw, text = load_full_episode(cfg.latent_root, "val", ep, cfg.num_cams)
+    latent_gt, action_raw, text = load_full_episode(cfg.latent_root, "val", ep, cfg.num_cams, view_indices=getattr(cfg, 'view_indices', None))
     p01, p99 = load_action_stats(cfg.latent_root)
     act = normalize_actions(action_raw, p01, p99)
     assert latent_gt.shape[0] >= win, f"episode {ep} too short ({latent_gt.shape[0]} < {win})"

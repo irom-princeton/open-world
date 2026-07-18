@@ -320,7 +320,7 @@ def main() -> None:
 
     records = []
     for ep_id in ep_ids:
-        latent_gt, action_raw, text = load_full_episode(cfg.latent_root, a.split, ep_id, cfg.num_cams)
+        latent_gt, action_raw, text = load_full_episode(cfg.latent_root, a.split, ep_id, cfg.num_cams, view_indices=getattr(cfg, 'view_indices', None))
         action_norm = normalize_actions(action_raw, p01, p99)
         for md in modes:
             for s in scales:

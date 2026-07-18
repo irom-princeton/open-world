@@ -59,7 +59,7 @@ def normalize_actions(action: np.ndarray, p01: np.ndarray, p99: np.ndarray, eps:
 
 def load_full_episode(
     latent_root: str, split: str, ep_id: str, num_cams: int, wrist_view_idx: int = 2,
-    joint_actions: dict | None = None,
+    joint_actions: dict | None = None, view_indices: tuple[int, ...] | None = None,
 ) -> tuple[torch.Tensor, np.ndarray, str]:
     """Load one preprocessed episode as the full (un-windowed) clip.
 
@@ -84,7 +84,15 @@ def load_full_episode(
     else:
         action = rec["action"].numpy()             # [Lf, action_dim]
     V_stored, C, Lf, h, w = latent.shape
-    sel = select_view_indices(V_stored, num_cams, wrist_view_idx, deterministic=True)
+    # An explicit view_indices pins the exact subset (must match training); else
+    # fall back to the num_cams wrist+side selection. Single source of truth with
+    # ARLatentDataset so previews/eval use the SAME cameras the model trained on.
+    if view_indices:
+        if max(view_indices) >= V_stored:
+            raise ValueError(f"view_indices {tuple(view_indices)} exceed stored views {V_stored}")
+        sel = list(view_indices)
+    else:
+        sel = select_view_indices(V_stored, num_cams, wrist_view_idx, deterministic=True)
     V = len(sel)
     lat = latent[sel]                              # [V, C, Lf, h, w]
     # height-stack cameras: [V, C, Lf, h, w] -> [Lf, C, V*h, w]
@@ -101,6 +109,7 @@ _INIT_RESIZE = (320, 192)                          # (W, H) -> 24x40 latents (VA
 
 def load_init_frame(
     init_dir: str, num_cams: int, wrist_view_idx: int, encoder, action_space: str = "cartesian",
+    view_indices: tuple[int, ...] | None = None,
 ) -> tuple[torch.Tensor, np.ndarray, str]:
     """Load a scenegen ``initialization`` directory as ONE latent frame + one action.
 
@@ -128,7 +137,12 @@ def load_init_frame(
         cams.append(encoder.encode_video(rgb).float())    # [C, 1, h, w]
     latent = torch.stack(cams, dim=0)                      # [V_stored, C, 1, h, w]
     V_stored, C, Lf, h, w = latent.shape
-    sel = select_view_indices(V_stored, num_cams, wrist_view_idx, deterministic=True)
+    if view_indices:
+        if max(view_indices) >= V_stored:
+            raise ValueError(f"view_indices {tuple(view_indices)} exceed stored views {V_stored}")
+        sel = list(view_indices)
+    else:
+        sel = select_view_indices(V_stored, num_cams, wrist_view_idx, deterministic=True)
     V = len(sel)
     lat = latent[sel].permute(2, 1, 0, 3, 4).reshape(Lf, C, V * h, w).contiguous()  # [1, C, V*h, w]
 
