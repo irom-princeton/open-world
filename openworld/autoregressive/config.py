@@ -26,7 +26,10 @@ import torch
 # the action encoder projects 1024 -> cross_attn_dim.
 # ---------------------------------------------------------------------------
 # Valid `action_cond_mode` values (see ARWMArgs.action_cond_mode).
-ACTION_COND_MODES = ("cross_attn", "cross_attn_pe", "cross_attn_aligned", "adaln")
+ACTION_COND_MODES = ("cross_attn", "cross_attn_pe", "cross_attn_aligned", "adaln", "none")
+# "none": disable the vector action path entirely -- the conditioner returns a
+# null (zero) cross-attn context and no AdaLN modulation. Used to isolate a
+# purely geometric conditioning (camera_cond) with no competing vector signal.
 
 # Valid `action_space` values (see ARWMArgs.action_space) -- the proprioceptive
 # representation that conditions the world model. Each maps to a default stats
@@ -287,6 +290,44 @@ class ARWMArgs:
     # same mode (self-forcing feeds the generator's cond to the teacher/critic).
     action_cond_mode: str = "cross_attn"
 
+    # ---------------- pixel-space action conditioning ----------------
+    # When True, append ``pixel_cond_channels`` extra input channels to the latent:
+    # per-frame Gaussian heatmaps of the projected desired EEF positions (left/right
+    # arm), rendered per view at the latent grid from the calibration+pose sidecar
+    # (``{split}_pixel_cond.npy``). A spatial, per-pixel-aligned anchor that
+    # complements the global vector action cond (which is unchanged). Only views
+    # with a valid projection (scene cams) carry a signal; wrist views stay blank.
+    # The model's patch-embed conv widens 16 -> 16+K with the new channels
+    # zero-initialized (identical to the baseline at init). Default off.
+    pixel_cond: bool = False
+    pixel_cond_channels: int = 2            # left-EEF heatmap, right-EEF heatmap
+    pixel_cond_sigma: float = 1.5           # Gaussian sigma (latent-grid pixels)
+
+    # ---------------- geometric ("camera") action conditioning ----------------
+    # When True, append 9 extra input channels = the GE-Sim-V2-style geometric
+    # conditioning, rendered per view at the latent grid from the calibration+pose
+    # sidecar (``{split}_camera_cond.npy``):
+    #   channels 0:3 -- trajectory band: L/R EEF projected + drawn (scene cams only;
+    #                   wrist cams are EEF-mounted -> degenerate projection -> blank).
+    #   channels 3:9 -- camera ray-map (rays_o, rays_d) from K + c2w, for ALL views;
+    #                   action-dependent for the moving wrist cams (carries the signal
+    #                   where the band cannot).
+    # Same widened-patch-embed (zero-init) injection as pixel_cond; the two are
+    # mutually exclusive (both write the extra-channel slot). Independent of the
+    # joint/cartesian action rep (rendered from the recorded EEF pose + camera
+    # geometry, not the action vector). Default off.
+    camera_cond: bool = False
+    camera_cond_channels: int = 9           # 3 band + 6 ray-map
+    camera_cond_band: bool = True           # draw the trajectory band (channels 0:3)
+    # Orientation sticks OFF by default: the rot6d->axes convention is unverified and the
+    # spokes are only a few px at the latent grid, so they risk feeding wrong orientation.
+    # The disk (position + gripper-open/close colour) carries the verified cues.
+    camera_cond_sticks: bool = False        # draw the orientation sticks in the band
+    # Also draw the band on the (fisheye) wrist views. Off -> scene cams only (the band
+    # is a reliable, undistorted anchor); on -> attempt all views, per-frame gated
+    # (the wrist band is fisheye-misplaced -- an ablation arm, not the default).
+    camera_cond_wrist_band: bool = False
+
     # ---------------- self-forcing / DMD -------------
     # Few-step student denoising schedule (flow-matching timesteps in [0,1000]).
     # Matches OmniDreams' `denoising_step_list = [1000, 750, 500, 250]`; the
@@ -397,6 +438,23 @@ class ARWMArgs:
         )
         self.in_channels = preset["in_channels"]
         self.cross_attn_dim = preset["cross_attn_dim"]
+
+        # VAE/target latent channels vs. the model's patch-embed input width. With
+        # pixel_cond / camera_cond the input carries K extra (clean, non-predicted)
+        # geometric channels; the diffusion target/output stays ``latent_channels``.
+        self.latent_channels = self.in_channels
+        if self.pixel_cond and self.camera_cond:
+            raise ValueError(
+                "pixel_cond and camera_cond both set: they share the extra-input-channel "
+                "slot (choose one geometric conditioning)."
+            )
+        if self.camera_cond:
+            self.extra_in_channels = self.camera_cond_channels
+        elif self.pixel_cond:
+            self.extra_in_channels = self.pixel_cond_channels
+        else:
+            self.extra_in_channels = 0
+        self.model_in_channels = self.in_channels + self.extra_in_channels
 
     @property
     def resolved_backbone_ckpt(self) -> str | None:
