@@ -48,6 +48,7 @@ class DiTBackbone(nn.Module, ABC):
         frames_per_block: int,
         window: int | None = None,
         causal: bool = True,          # False -> full bidirectional attention (teacher)
+        clean_x: torch.Tensor | None = None,  # [B, F, C, H, W] clean context for teacher-forcing CD
     ) -> torch.Tensor:                # velocity, same shape as latents
         ...
 
@@ -64,8 +65,12 @@ class DiTBackbone(nn.Module, ABC):
     ) -> torch.Tensor:                # velocity, same shape as latent_block
         ...
 
-    def make_kv_cache(self, *, max_blocks: int | None = None, static: bool = False) -> KVCache:
-        return KVCache(self.num_self_layers, max_blocks=max_blocks, static=static)
+    def make_kv_cache(self, *, max_blocks: int | None = None, static: bool = False,
+                      anchor_blocks: int = 0, memory_stride: int = 0,
+                      memory_blocks: int = 0, recent_blocks: int | None = None) -> KVCache:
+        return KVCache(self.num_self_layers, max_blocks=max_blocks, static=static,
+                       anchor_blocks=anchor_blocks, memory_stride=memory_stride,
+                       memory_blocks=memory_blocks, recent_blocks=recent_blocks)
 
     def tokens_per_frame(self, latent_h: int, latent_w: int) -> int:
         return (latent_h // self.patch_spatial) * (latent_w // self.patch_spatial)

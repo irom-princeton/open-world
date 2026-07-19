@@ -51,6 +51,54 @@ def dense_block_causal_mask(
     return allowed
 
 
+def dense_teacher_forcing_mask(
+    block_ids: torch.Tensor,
+    *,
+    window: int | None = None,
+) -> torch.Tensor:
+    """Dense boolean mask ``[2S, 2S]`` for **teacher-forcing / clean-context** CD.
+
+    The token sequence is the *doubled* clip ``[clean (S) || noisy (S)]`` (clean
+    first), where both halves carry the same ``block_ids`` (frame ``f``'s clean
+    token and its noisy token share block id). Mirrors Causal-Forcing's
+    ``_prepare_teacher_forcing_mask``:
+
+    * a **clean** query attends the clean keys **block-causally** (``kv`` in the
+      clean half with ``block(kv) <= block(q)``) -- the clean context is a normal
+      block-causal video and never sees the noisy half;
+    * a **noisy** query in block ``i`` attends (a) the clean keys of the *previous*
+      blocks ``[0, i)`` (its clean context) and (b) its **own** noisy block's tokens
+      -- and NOTHING else (no other noisy blocks, no clean block ``i``);
+    * every token attends itself (the diagonal), so a padded / degenerate row is
+      never fully masked.
+
+    ``window`` bounds how far back the clean context may reach (``block(q) - block(kv)
+    < window``), matching the local-attention option of the plain block-causal mask.
+    ``True`` = attend.
+    """
+    S = block_ids.numel()
+    bq = block_ids.view(-1, 1)              # [S, 1]
+    bkv = block_ids.view(1, -1)             # [1, S]
+
+    causal = bkv <= bq                      # clean block-causal (clean query x clean key)
+    same_block = bq == bkv                  # own block (noisy query x noisy key)
+    # clean-context for a noisy query in block i is the STRICTLY-previous blocks
+    # [0, i) (its own clean block i is excluded -- frame i is the frame being
+    # denoised, so its clean latent is not given as context).
+    prev_ctx = bkv < bq
+    if window is not None:
+        causal = causal & (bq - bkv < window)
+        prev_ctx = prev_ctx & (bq - bkv < window)
+
+    m = block_ids.new_zeros((2 * S, 2 * S), dtype=torch.bool)
+    m[:S, :S] = causal                       # clean query x clean key: block-causal
+    m[S:, :S] = prev_ctx                      # noisy query x clean key: previous clean context
+    m[S:, S:] = same_block                    # noisy query x noisy key: own block only
+    # clean query x noisy key stays False (clean context ignores the noisy half).
+    m.fill_diagonal_(True)                    # self-attention (covers padded/edge rows)
+    return m
+
+
 def frame_aligned_cross_mask(
     num_q_frames: int,
     tokens_per_frame: int,

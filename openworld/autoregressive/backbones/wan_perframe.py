@@ -144,6 +144,7 @@ def _model_forward(
     return_dict=True,
     attention_kwargs=None,
     static_kv=None,
+    clean_x=None,
 ):
     """WanTransformer3DModel.forward supporting ``timestep`` of shape [B] or [B, T].
 
@@ -152,7 +153,19 @@ def _model_forward(
     commit flag -- threaded to each block's self-attention as explicit inputs so a
     compiled block loop tracks the in-place cache mutation (the K/V themselves are
     registered buffers on each ``attn1.kv``). ``None`` -> the ctx-based path (dynamic
-    cache / train / eager)."""
+    cache / train / eager).
+
+    ``clean_x`` (set by the backbone for teacher-forcing / clean-context CD, Causal
+    Forcing++ stage L2c) is a clean latent ``[B, C, F, H, W]`` matching
+    ``hidden_states``. When given, the token sequence is *doubled* to ``[clean (S) ||
+    noisy (S)]`` (clean first): both halves are patch-embedded and share RoPE
+    positions ``0..F-1`` (each half is roped identically), the clean half gets a
+    timestep-0 ("aug_t=0") AdaLN embedding while the noisy half keeps ``timestep``,
+    the blocks run over the doubled sequence under the caller's teacher-forcing
+    attention mask (``ctx.dense_mask`` shaped ``[2S, 2S]``), and only the noisy
+    (second) half is kept for the output head -- so the returned velocity has the
+    same shape as the no-``clean_x`` path. Requires a per-frame ``[B, F]`` timestep
+    (the backbone coerces it). Mirrors Causal-Forcing's ``clean_x`` prepend."""
     if attention_kwargs is not None:
         attention_kwargs = attention_kwargs.copy()
         lora_scale = attention_kwargs.pop("scale", 1.0)
@@ -171,8 +184,25 @@ def _model_forward(
     rotary_emb = self.rope(hidden_states)
     hidden_states = self.patch_embedding(hidden_states)
     hidden_states = hidden_states.flatten(2).transpose(1, 2)   # [B, seq=(F'*H'*W'), dim]
+    seq_noisy = hidden_states.shape[1]                          # S = F'*H'*W'
 
     perframe = timestep.ndim == 2
+
+    if clean_x is not None:
+        # Teacher forcing / clean-context CD: prepend the clean clip's tokens.
+        # RoPE, timestep and the block modulation are all built for the DOUBLED
+        # sequence [clean (S) || noisy (S)] here; the blocks run over 2S and only
+        # the noisy half is kept below (see the ``x[:, S:]`` slice after the loop).
+        assert perframe, "clean_x (teacher forcing) requires a per-frame [B, F] timestep"
+        clean_tok = self.patch_embedding(clean_x).flatten(2).transpose(1, 2)   # [B, S, dim]
+        hidden_states = torch.cat([clean_tok, hidden_states], dim=1)           # clean first
+        # Both halves share frame positions 0..F-1: rope() is built for F frames,
+        # so we simply repeat it across the two halves (NOT positions 0..2F-1).
+        rotary_emb = torch.cat([rotary_emb, rotary_emb], dim=2)
+        # Clean half gets an aug_t=0 ("clean") timestep; noisy half keeps ``timestep``.
+        timestep = torch.cat([torch.zeros_like(timestep), timestep], dim=1)    # [B, 2F]
+        post_patch_num_frames = 2 * post_patch_num_frames
+
     temb, timestep_proj, encoder_hidden_states, encoder_hidden_states_image = self.condition_embedder(
         timestep, encoder_hidden_states, encoder_hidden_states_image
     )
@@ -206,7 +236,14 @@ def _model_forward(
         for block in self.blocks:
             hidden_states = block(hidden_states, encoder_hidden_states, timestep_proj, rotary_emb, **_kv)
 
-    # Auxiliary state-prediction feature tap (WEAVER-style joint obs+state
+    if clean_x is not None:
+        # Drop the clean half: keep only the noisy tokens + their (noisy-half) temb
+        # for the output head. ``post_patch_num_frames`` returns to F for unpatchify.
+        hidden_states = hidden_states[:, seq_noisy:]
+        temb = temb[:, temb.shape[1] // 2:]
+        post_patch_num_frames = post_patch_num_frames // 2
+
+    # Auxiliary state-prediction feature tap (Finding-2 / WEAVER-style joint obs+state
     # prediction): pool the transformer's per-frame hidden states over spatial tokens
     # -> [B, Fr, D], stashed for the backbone's state head. Gated by `_stash_state_feat`
     # so it is a no-op (and zero overhead) unless state_pred is enabled.
