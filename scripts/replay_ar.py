@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import mediapy
@@ -90,6 +91,11 @@ def main() -> None:
                    help="Diagnostic: 'zero' feeds neutral actions, 'const' holds the first "
                         "action for the whole rollout. If spurious camera motion vanishes, it "
                         "was being driven by the action conditioning.")
+    p.add_argument("--conditioning", choices=["episode", "action"], default="episode",
+                   help="camera_cond source (camera_cond checkpoints only): 'episode' renders "
+                        "band+raymap from the RECORDED sidecar geometry (training parity); "
+                        "'action' synthesises them CLOSED-LOOP from the commanded joint chunk via "
+                        "FK (deploy/policy-in-the-loop path). 'action' requires a joint sidecar.")
     p.add_argument("--video-fps", type=int, default=8)
     p.add_argument("--separate", action="store_true", help="Also write gt/ and pred/ videos separately.")
     a = p.parse_args()
@@ -144,6 +150,21 @@ def main() -> None:
         ep_ids = ep_ids[: a.num_episodes]
     p01, p99 = load_action_stats(cfg.latent_root)
 
+    # geometric (camera_cond) conditioning: recorded-sidecar (episode) or FK-closed-loop (action).
+    # These K extra channels ride the widened patch-embed slot; the ckpt is otherwise unloadable.
+    cam_data, cam_sel, joint_data = None, None, None
+    if getattr(cfg, "camera_cond", False):
+        cam_data = np.load(os.path.join(cfg.latent_root, f"{a.split}_camera_cond.npy"),
+                           allow_pickle=True).item()
+        cam_sel = list(cfg.view_indices) if getattr(cfg, "view_indices", None) else None
+        if a.conditioning == "action":
+            # closed-loop needs the commanded joint chunk [Lf,16] to FK the band+raymap.
+            joint_data = np.load(os.path.join(cfg.latent_root, f"{a.split}_joint_actions.npy"),
+                                 allow_pickle=True).item()
+            print("[replay] camera_cond=CLOSED-LOOP (FK from commanded joints)")
+        else:
+            print("[replay] camera_cond=EPISODE (recorded sidecar geometry)")
+
     summary = []
     for ep_id in ep_ids:
         latent_gt, action_raw, text = load_full_episode(cfg.latent_root, a.split, ep_id, cfg.num_cams, view_indices=getattr(cfg, 'view_indices', None))
@@ -154,12 +175,42 @@ def main() -> None:
             action_norm = np.zeros_like(action_norm)                     # neutral action everywhere
         elif a.action_override == "const":
             action_norm = np.repeat(action_norm[:1], action_norm.shape[0], axis=0)  # hold the first (no commanded change)
+        # camera_cond: render the K extra geometric channels for this episode (the widened
+        # patch-embed slot). Same signal the trainer fed; None -> plain 16-channel model.
+        pix = None
+        if cam_data is not None and ep_id in cam_data:
+            # latent_gt is [L, C, V*h, w]; per-view latent height = (V*h)//V
+            h = latent_gt.shape[2] // cfg.num_cams; w = latent_gt.shape[3]
+            sel = cam_sel if cam_sel is not None else list(range(cfg.num_cams))
+            rec = cam_data[ep_id]
+            if a.conditioning == "action" and joint_data is not None and ep_id in joint_data:
+                # CLOSED-LOOP: anchor from the episode's initial geometry, then FK the
+                # COMMANDED joint chunk into band+evolving-wrist-c2w -> the same signal a
+                # policy rollout would feed. (Here the "command" is the recorded joint
+                # trajectory, so this also validates FK-parity vs the episode path.)
+                from openworld.autoregressive.conditioning.closed_loop_camera_cond import (
+                    ClosedLoopCameraCond)
+                clc = ClosedLoopCameraCond(
+                    np.asarray(rec["pose"])[0], np.asarray(rec["c2w"])[0],
+                    np.asarray(joint_data[ep_id])[0], np.asarray(rec["K"]),
+                    np.asarray(rec["band_valid"]))
+                pix = clc.render(np.asarray(joint_data[ep_id]), sel, h, w,
+                                 wrist_band=getattr(cfg, "camera_cond_wrist_band", False),
+                                 draw_sticks=getattr(cfg, "camera_cond_sticks", False))
+            else:
+                from openworld.autoregressive.conditioning.camera_cond import render_camera_cond_full
+                pix = render_camera_cond_full(
+                    rec, sel, h, w, band_scale=True,
+                    draw_band=getattr(cfg, "camera_cond_band", True),
+                    draw_sticks=getattr(cfg, "camera_cond_sticks", False),
+                    wrist_band=getattr(cfg, "camera_cond_wrist_band", False))
+            pix = pix.float()                                        # [L, K, V*h, w] torch.float32
         try:
             gt_lat, pred_lat, n_hist = replay_episode_latents(
                 model, latent_gt, action_norm,
                 frames_per_block=cfg.frames_per_block, num_history_blocks=a.history_blocks,
                 in_channels=cfg.in_channels, device=device, dtype=cfg.dtype, max_blocks=max_blocks,
-                scheduler=sched,
+                scheduler=sched, pixel_cond=pix,
             )
         except RuntimeError as e:
             print(f"[replay] {ep_id}: skipped ({e})")

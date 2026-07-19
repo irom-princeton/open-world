@@ -32,14 +32,22 @@ def _cond_for(cond, block_idx):
     return cond(block_idx) if callable(cond) else cond
 
 
+def _pix_slice(pixel_cond, start, n):
+    """Slice the per-frame pixel/camera cond ``[B, F_total, K, H, W]`` to the ``n``
+    frames of the block starting at frame ``start`` (None -> no extra channels)."""
+    return None if pixel_cond is None else pixel_cond[:, start:start + n]
+
+
 @torch.no_grad()
-def _prime_history(generator, history_blocks, cond, scheduler, kv_cache, frames_per_block):
+def _prime_history(generator, history_blocks, cond, scheduler, kv_cache, frames_per_block,
+                   pixel_cond=None):
     """Commit clean history blocks into the cache (sigma≈0). Returns next frame."""
     start = 0
     zero_t = scheduler.to_timestep(torch.zeros(history_blocks[0].shape[0], device=history_blocks[0].device))
     for b, blk in enumerate(history_blocks):
         generator.forward_cached(
-            blk, zero_t, _cond_for(cond, b), kv_cache=kv_cache, start_frame=start, commit=True
+            blk, zero_t, _cond_for(cond, b), kv_cache=kv_cache, start_frame=start, commit=True,
+            pixel_cond=_pix_slice(pixel_cond, start, blk.shape[1]),
         )
         start += blk.shape[1]
     return start
@@ -57,6 +65,7 @@ def generate_rollout(
     kv_cache: KVCache | None = None,
     last_step_grad: bool = False,
     random_exit: bool = False,
+    pixel_cond: torch.Tensor | None = None,   # [B, F_total, K, H, W] over history+generated frames
 ) -> tuple[list[torch.Tensor], KVCache]:
     """Few-step, KV-cached autoregressive rollout. Returns the student's clean
     blocks (the last one carrying grad iff ``last_step_grad``) and the cache.
@@ -75,7 +84,8 @@ def generate_rollout(
     dev, pdt = gp.device, gp.dtype
     start = 0
     if history_blocks:
-        start = _prime_history(generator, history_blocks, cond, scheduler, kv_cache, frames_per_block)
+        start = _prime_history(generator, history_blocks, cond, scheduler, kv_cache, frames_per_block,
+                               pixel_cond=pixel_cond)
 
     sigmas = scheduler.sigmas
     n_steps = scheduler.num_steps
@@ -93,6 +103,7 @@ def generate_rollout(
     for b in range(num_blocks):
         x = torch.randn(latent_block_shape, device=dev, dtype=pdt)
         cb = _cond_for(cond, b)
+        pcb = _pix_slice(pixel_cond, start, frames_per_block)
         for i in range(exit_idx + 1):
             sigma_i = sigmas[i].to(dev).expand(B)
             t_i = scheduler.to_timestep(sigma_i)
@@ -102,7 +113,7 @@ def generate_rollout(
             with ctx:
                 v = generator.forward_cached(
                     x if grad_on else x.detach(), t_i, cb,
-                    kv_cache=kv_cache, start_frame=start, commit=False,
+                    kv_cache=kv_cache, start_frame=start, commit=False, pixel_cond=pcb,
                 )
                 x0_hat = scheduler.x0_from_velocity(x if grad_on else x.detach(), v, sigma_i)
             if not last:
@@ -116,7 +127,8 @@ def generate_rollout(
         with torch.no_grad():
             zero_t = scheduler.to_timestep(torch.zeros(B, device=dev))
             generator.forward_cached(
-                x0_clean.detach(), zero_t, cb, kv_cache=kv_cache, start_frame=start, commit=True
+                x0_clean.detach(), zero_t, cb, kv_cache=kv_cache, start_frame=start, commit=True,
+                pixel_cond=pcb,
             )
         blocks.append(x0_clean)
         start += frames_per_block

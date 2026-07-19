@@ -91,9 +91,12 @@ class ARWorldModel(nn.Module):
         latent_block_shape: tuple,
         scheduler: FlowMatchScheduler | None = None,
         max_kv_blocks: int | None = None,
+        pixel_cond: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Autoregressively generate ``num_blocks`` latent blocks. Returns
-        ``[B, num_blocks*fpb, C, H, W]`` (caller decodes with the backbone VAE)."""
+        ``[B, num_blocks*fpb, C, H, W]`` (caller decodes with the backbone VAE).
+        ``pixel_cond`` [B, F_total, K, H, W] carries the per-frame pixel/camera action
+        conditioning over history+generated frames (pixel_cond / camera_cond only)."""
         scheduler = scheduler or FlowMatchScheduler(
             self.cfg.denoising_step_list, num_train_timestep=self.cfg.num_train_timestep,
             warp=self.cfg.warp_denoising_step,
@@ -104,6 +107,7 @@ class ARWorldModel(nn.Module):
             frames_per_block=self.cfg.frames_per_block,
             num_blocks=num_blocks, latent_block_shape=latent_block_shape,
             history_blocks=history_latents, kv_cache=kv, last_step_grad=False,
+            pixel_cond=pixel_cond,
         )
         return torch.cat(blocks, dim=1)
 

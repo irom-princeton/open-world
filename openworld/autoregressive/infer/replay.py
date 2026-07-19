@@ -198,12 +198,17 @@ def replay_episode_latents(
     dtype: torch.dtype | None = None,
     max_blocks: int | None = None,
     scheduler=None,
+    pixel_cond: torch.Tensor | None = None,   # [L, K, V*h, w] per-frame pixel/camera cond
 ) -> tuple[torch.Tensor, torch.Tensor, int]:
     """Open-loop AR replay in latent space.
 
     Returns ``(gt [N, C, V*h, w], pred [N, C, V*h, w], n_history_frames)`` where
     ``N = n_history_frames + generated`` and ``pred`` is the history (ground truth)
     concatenated with the generated blocks, aligned 1:1 with ``gt`` for comparison.
+
+    ``pixel_cond`` (pixel_cond / camera_cond checkpoints) carries the K extra clean
+    geometric channels per frame; they are appended to the latent inside the widened
+    patch-embed and are NOT part of the diffusion target.
     """
     fpb = frames_per_block
     L, C, Hs, W = latent_gt.shape
@@ -233,10 +238,11 @@ def replay_episode_latents(
     with ac:
         cond = model.encode_cond(actions, cfg_drop=False)            # [1, N, cross]
         latent_block_shape = (1, fpb, in_channels, Hs, W)
+        pix = None if pixel_cond is None else pixel_cond[:N].unsqueeze(0).to(device, pdt)  # [1, N, K, Hs, W]
         gen = model.rollout(
             history_blocks, cond,
             num_blocks=num_blocks, latent_block_shape=latent_block_shape,
-            scheduler=scheduler,
+            scheduler=scheduler, pixel_cond=pix,
         )                                                            # [1, num_blocks*fpb, C, Hs, W]
 
     gen = gen[0].float().cpu()
