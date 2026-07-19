@@ -32,6 +32,22 @@ class LayerKVCache:
     v: torch.Tensor | None = None
     block_lens: list[int] = field(default_factory=list)
     max_blocks: int | None = None
+    # consistency_aug: anchored + strided + windowed eviction (opt-in). When
+    # ``recent_blocks`` is None the legacy FIFO-over-``max_blocks`` policy is used
+    # (fully backward-compatible). When set, a committed block with commit-index
+    # ``g`` (0-based) is retained iff it is one of the first ``anchor_blocks``
+    # (the GT-primed anchor), OR within the last ``recent_blocks``, OR a strided
+    # "memory" block (``(g-anchor) % memory_stride == 0``, capped to the most-recent
+    # ``memory_blocks``). This keeps a bounded window that stays tethered to early
+    # context -- WEAVER's memory frames, expressed purely as an eviction policy.
+    # RoPE is baked into keys at commit and softmax is permutation-invariant over the
+    # key axis, so retaining a non-contiguous subset is exact.
+    anchor_blocks: int = 0
+    memory_stride: int = 0
+    memory_blocks: int = 0
+    recent_blocks: int | None = None
+    block_ids: list[int] = field(default_factory=list)   # commit index of each retained block
+    committed: int = 0                                    # total blocks ever committed
 
     def append(self, k_new: torch.Tensor, v_new: torch.Tensor) -> None:
         if self.k is None:
@@ -40,6 +56,8 @@ class LayerKVCache:
             self.k = torch.cat([self.k, k_new], dim=2)
             self.v = torch.cat([self.v, v_new], dim=2)
         self.block_lens.append(k_new.shape[2])
+        self.block_ids.append(self.committed)
+        self.committed += 1
         self._evict()
 
     def extend(self, k_new: torch.Tensor, v_new: torch.Tensor, commit: bool):
@@ -58,12 +76,46 @@ class LayerKVCache:
         return torch.cat([self.k, k_new], dim=2), torch.cat([self.v, v_new], dim=2)
 
     def _evict(self) -> None:
+        if self.recent_blocks is not None:
+            return self._evict_anchored()
         if self.max_blocks is None:
             return
         while len(self.block_lens) > self.max_blocks:
             drop = self.block_lens.pop(0)
+            self.block_ids.pop(0)
             self.k = self.k[:, :, drop:, :]
             self.v = self.v[:, :, drop:, :]
+
+    def _evict_anchored(self) -> None:
+        """consistency_aug eviction: keep anchor + strided memory + recent window.
+
+        Blocks can be dropped from the *middle* (a retained memory block with newer
+        blocks evicted around it), so this gathers the surviving token spans rather
+        than slicing a prefix."""
+        T = self.committed
+        mem_ids: set[int] = set()
+        if self.memory_stride and self.memory_stride > 0:
+            cand = [g for g in self.block_ids
+                    if g >= self.anchor_blocks and (g - self.anchor_blocks) % self.memory_stride == 0]
+            if self.memory_blocks and self.memory_blocks > 0:
+                cand = cand[-self.memory_blocks:]
+            mem_ids = set(cand)
+        keep = [(g < self.anchor_blocks) or (g >= T - self.recent_blocks) or (g in mem_ids)
+                for g in self.block_ids]
+        if all(keep):
+            return
+        spans, new_lens, new_ids = [], [], []
+        pos = 0
+        for kp, L, g in zip(keep, self.block_lens, self.block_ids):
+            if kp:
+                spans.append(torch.arange(pos, pos + L, device=self.k.device))
+                new_lens.append(L)
+                new_ids.append(g)
+            pos += L
+        index = torch.cat(spans)
+        self.k = self.k.index_select(2, index)
+        self.v = self.v.index_select(2, index)
+        self.block_lens, self.block_ids = new_lens, new_ids
 
     @property
     def length(self) -> int:
@@ -72,6 +124,8 @@ class LayerKVCache:
     def reset(self) -> None:
         self.k = self.v = None
         self.block_lens = []
+        self.block_ids = []
+        self.committed = 0
 
 
 class StaticLayerKVCache(nn.Module):
@@ -190,17 +244,26 @@ class KVCache:
     """
 
     def __init__(self, num_layers: int, *, max_blocks: int | None = None,
-                 static: bool = False, layer_caches: "list | None" = None):
+                 static: bool = False, layer_caches: "list | None" = None,
+                 anchor_blocks: int = 0, memory_stride: int = 0,
+                 memory_blocks: int = 0, recent_blocks: int | None = None):
         self.static = static
         self.num_layers = num_layers
         self.max_blocks = max_blocks
         if static:
             if max_blocks is None:
                 raise ValueError("static KVCache requires a finite max_blocks (the attention window)")
+            if recent_blocks is not None:
+                # The static ring buffer is a fixed FIFO window for CUDA-graph capture;
+                # anchored/strided eviction needs the growing cache. Training uses the
+                # growing cache, so this only guards a misconfigured static deploy.
+                raise ValueError("consistency_aug anchored eviction requires the growing (non-static) KV cache")
             self.self_attn = (layer_caches if layer_caches is not None
                               else [StaticLayerKVCache(max_blocks) for _ in range(num_layers)])
         else:
-            self.self_attn = [LayerKVCache(max_blocks=max_blocks) for _ in range(num_layers)]
+            self.self_attn = [LayerKVCache(
+                max_blocks=max_blocks, anchor_blocks=anchor_blocks, memory_stride=memory_stride,
+                memory_blocks=memory_blocks, recent_blocks=recent_blocks) for _ in range(num_layers)]
         self.cross_attn: list[tuple[torch.Tensor, torch.Tensor] | None] = [None] * num_layers
         # static-mode shared per-forward state (refreshed eagerly in begin_forward):
         self.attn_mask: torch.Tensor | None = None   # [1,1,1,W+block_tok] bool validity

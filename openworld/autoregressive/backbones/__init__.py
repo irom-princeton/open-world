@@ -35,14 +35,17 @@ def _construct(cfg, name: str) -> DiTBackbone:
         from .wan import WanBackbone
         state_pred = bool(getattr(cfg, "state_pred", False))
         state_pred_dim = int(getattr(cfg, "state_pred_dim", 16))
+        # extra input channels for pixel/camera_cond: widen the patch-embed conv so
+        # the checkpoint's (16+K)-channel patch_embedding loads (0 -> baseline 16ch).
+        extra_in = int(getattr(cfg, "extra_in_channels", 0))
         if cfg.random_init_backbone:
             return WanBackbone.random_init(
                 cross_attn_dim=cfg.cross_attn_dim, small=True,
-                action_mode=mode, action_frame_repeat=frame_repeat,
+                action_mode=mode, action_frame_repeat=frame_repeat, extra_in_channels=extra_in,
                 state_pred=state_pred, state_pred_dim=state_pred_dim)
         return WanBackbone.from_pretrained(
             cfg.resolved_backbone_ckpt, cross_attn_dim=cfg.cross_attn_dim, torch_dtype=cfg.dtype,
-            action_mode=mode, action_frame_repeat=frame_repeat,
+            action_mode=mode, action_frame_repeat=frame_repeat, extra_in_channels=extra_in,
             state_pred=state_pred, state_pred_dim=state_pred_dim,
         )
 
