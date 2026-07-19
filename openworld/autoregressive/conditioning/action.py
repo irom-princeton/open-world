@@ -63,6 +63,12 @@ class ActionConditioner(nn.Module):
         frame_level_cond: bool = True,
         cfg_drop: bool | None = None,   # override dropout (False at eval)
     ) -> torch.Tensor:                  # [B, L, cross_attn_dim]
+        # "none" mode: no vector action path at all -> a single null (zero) cross-attn
+        # token. Used to isolate geometric (camera_cond) conditioning. The encoder/proj
+        # params exist but are never touched (no grad), so the model carries no vector
+        # action signal.
+        if self.mode == "none":
+            return actions.new_zeros(actions.shape[0], 1, self.cross_attn_dim)
         # Text needs a tokenizer + text encoder; until that pathway is wired the
         # condition is action-only (the cross-attention already attends to the
         # per-frame action tokens). Drop texts rather than crash on a missing
