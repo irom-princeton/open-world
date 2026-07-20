@@ -1,144 +1,149 @@
-# Running Policy Evaluation in OpenWorld
+# Running Policy Evaluation
 
-Policy evaluation drives a policy (e.g. pi0.5 / openpi) **closed-loop** inside a
-world model over a suite of initializations, producing rollout videos (and,
-optionally, reward annotations). It is a two-phase pipeline:
+Run a policy closed-loop inside a world model on initializations.
+
+## Quick Start
+
+```bash
+# Run pi0.5 with AR 2-view model on teleop inits
+uv run python scripts/run_evaluation.py \
+    --config configs/evaluation/teleop_ar_pi05.yaml
+```
+
+This runs the `wm_student_2view.pt` checkpoint with pi0.5 policy on initializations in `assets/teleop_inits/`.
+
+Output videos: `outputs/teleop_ar_pi05/videos/`
+
+## Running on Different Initializations
+
+```bash
+# Run on a different initialization directory
+uv run python scripts/run_evaluation.py \
+    --config configs/evaluation/teleop_ar_pi05.yaml \
+    --dataset path/to/your/init_dir
+```
+
+## Creating a Custom Eval Config
+
+If you need different settings, create a new YAML config:
+
+```yaml
+# configs/evaluation/my_eval.yaml
+world_model:
+  name: ar_wan
+  checkpoint_path: path/to/checkpoint.pt
+  params:
+    config_path: configs/inference/ar_wan_student_2view.py
+    stats_root: path/to/stats_dir
+    vae_dir: external/Wan2.1-T2V-1.3B-Diffusers
+    num_inference_steps: 32
+    num_cams: 2
+    width: 320
+    height: 192
+    view_order: [exterior_right, wrist]
+
+policy:
+  name: openpi
+  checkpoint_path: ~/.cache/openpi/openpi-assets/checkpoints/pi05_droid
+  params:
+    config_name: pi05_droid
+    repo_path: external/openpi
+    pytorch_device: cuda
+    exterior_view_name: exterior_right
+    wrist_view_name: wrist
+    stacked_view_order: [exterior_right, wrist]
+    resize_height: 224
+    resize_width: 224
+    joint_position_dim: 7
+    action_adapter_checkpoint_path: checkpoints/action_adapter/model2_15_9.pth
+    action_adapter_gripper_max: 0.9
+
+reward_model:
+  name: dummy
+  params: {}
+
+scheduler:
+  chunk_size: 8
+
+duration: 25
+action_hz: 5
+dataset_path: path/to/init_dir
+video_dir: outputs/my_eval
+```
+
+Then run:
+```bash
+uv run python scripts/run_evaluation.py --config configs/evaluation/my_eval.yaml
+```
+
+## Initialization Directory Structure
 
 ```
-run_evaluation.py  (reads an eval YAML)
-   └─ spawns generate_videos.py  →  WorldModelEnv + Evaluator
-                                     (policy ⇄ world model, closed loop)
-   └─ (optional) scores the videos with a reward model
+init_dir/
+├── init_0/
+│   ├── exterior_left.png
+│   ├── exterior_right.png
+│   ├── wrist.png
+│   └── initialization.yaml
+├── init_1/
+│   └── ...
+└── stats.json  # Optional: action normalization stats
 ```
 
-A run is fully specified by an eval YAML under `configs/evaluation/`:
-world model + checkpoint, policy + checkpoint, reward model, the benchmark
-suite (`dataset_path`), and the output dir (`video_dir`).
+## Available Configs
+
+See `configs/evaluation/` for pre-configured examples:
+- `teleop_ar_pi05.yaml` - AR 2-view + pi0.5 + teleop inits
+- `0617_ar_pi05.yaml` - AR 3-view + pi0.5
+- `0617_ctrlworld_pi05.yaml` - Ctrl-World + pi0.5
 
 ---
 
-## Policy eval under the three world models (pi0.5)
+## Reference: World Model Config Examples
 
-We run **pi0.5** (`pi05_droid`) closed-loop inside three world models. All
-rollout-generation **code is self-contained in this repo**; only large weights
-and benchmark data stay external (reached through symlinks).
+<details>
+<summary>AR Wan 2-view</summary>
 
-| WM | name | code | venv | pi0.5 |
-|----|------|------|------|-------|
-| **Ctrl-World** (SVD) | `vidwm` | `external/vidwm` (vendored pkg) | `.venv-eval` | in-process |
-| **AR slow student** (Wan block-causal) | `ar_wan` | `openworld/autoregressive` | `.venv-eval` | in-process |
-| **weaver fast** (few-step) | `weaver` | `external/WEAVER` (submodule) | `.venv-weaver` | out-of-process websocket server |
-
-Per-WM specifics — which venv, whether to spin up the pi0.5 websocket server,
-PYTHONPATH, diffusion step counts, view order, action adapter — are abstracted
-into the per-WM eval YAML and the launcher's runtime profile. You only choose
-the **world model + benchmark + checkpoint**.
-
-### One-time setup (on a login node, which has internet)
-
-```bash
-bash bash_scripts/setup_eval_env.sh            # submodules + .venv-eval + symlinks
-bash bash_scripts/setup_eval_env.sh --venv-weaver   # also build the weaver venv (heavy)
+```yaml
+world_model:
+  name: ar_wan
+  checkpoint_path: checkpoints/ar_wm/wm_student_2view.pt
+  params:
+    config_path: configs/inference/ar_wan_student_2view.py
+    num_cams: 2
+    view_order: [exterior_right, wrist]
+    num_inference_steps: 32
 ```
+</details>
 
-This initializes the `external/openpi` and `external/WEAVER` submodules, builds
-`.venv-eval` (`uv sync --extra policy-openpi`), and creates the checkpoint/data
-symlinks (weights stay external). `--venv-weaver` additionally builds the
-torch-2.7 weaver venv from `external/WEAVER/pyproject.toml`.
+<details>
+<summary>AR Wan 3-view bimanual</summary>
 
-### Launch a run — one unified entry point
-
-```bash
-sbatch bash_scripts/eval_wm.sbatch --wm ctrlworld          # Ctrl-World
-sbatch bash_scripts/eval_wm.sbatch --wm ar                 # AR slow student
-sbatch bash_scripts/eval_wm.sbatch --wm weaver             # weaver fast (auto-starts pi0.5 server)
+```yaml
+world_model:
+  name: ar_wan
+  checkpoint_path: checkpoints/ar_wm/wm_student_3view_bimanual.pt
+  params:
+    config_path: configs/inference/ar_wan_student_3view_bimanual.py
+    num_cams: 3
+    view_order: [exterior_right, exterior_left, wrist]
+    num_inference_steps: 32
 ```
+</details>
 
-The eval YAML is resolved as `configs/evaluation/<benchmark>_<wm>_pi05.yaml`
-(`--benchmark` defaults to `0617`). The launcher selects the right venv, and for
-`weaver` it launches the pi0.5 `serve_policy.py` websocket server in `.venv-eval`
-on the shared H200 and waits for it before starting the rollout.
+<details>
+<summary>Ctrl-World (SVD)</summary>
 
-Optional overrides (forwarded to `run_evaluation.py`, no YAML edit needed):
-
-```bash
-sbatch bash_scripts/eval_wm.sbatch --wm ar --checkpoint checkpoints/ar_wm/wm_student_2view.pt
-sbatch bash_scripts/eval_wm.sbatch --wm weaver --dataset data/benchmark/0617_smoke --duration 10
-sbatch bash_scripts/eval_wm.sbatch --wm ctrlworld --config configs/evaluation/0617_ctrlworld_pi05.yaml
+```yaml
+world_model:
+  name: ctrlworld
+  checkpoint_path: checkpoints/wm/ctrlworld/v0-checkpoint-120000.pt
+  params:
+    svd_model_path: external/stable-video-diffusion-img2vid
+    clip_model_path: external/clip-vit-base-patch32
+    num_frames: 5
+    num_history: 6
+    action_dim: 7
+    num_inference_steps: 50
 ```
-
-> For the `ar` world model, `--checkpoint` takes an AR student `.pt`. The two published
-> students (`wm_student_2view.pt` / `wm_student_3view_bimanual.pt`,
-> [docs/MODELS.md](MODELS.md)) are undistilled, so the AR eval YAML must use its
-> many-step (not few-step) rollout schedule, and the eval config's geometry must match
-> the checkpoint (see `configs/inference/`).
-
-`--config <path>` · `--benchmark <name>` · `--checkpoint <path>` ·
-`--dataset <path>` · `--video-dir <path>` · `--duration <sec>` · `--port <n>`
-
-Outputs land under `video_dir/videos/` (per the YAML, e.g.
-`outputs/0617_pi05/{ctrlworld,ar,weaver}/videos/`).
-
-### Where the external bits live (weights + data, not code)
-
-| symlink (in-repo) | source |
-|-------------------|--------|
-| `external/openpi`, `external/WEAVER` | git submodules (code, tracked) |
-| `external/vidwm` | vendored source (code, tracked) |
-| `external/stable-video-diffusion-img2vid`, `external/clip-vit-base-patch32` | SVD / CLIP weights |
-| `checkpoints/action_adapter/model2_15_9.pth` | cartesian action adapter |
-| `checkpoints/ctrlworld`, `checkpoints/weaver` | WM checkpoint dirs |
-| `data/benchmark/0617_generated` | benchmark suite (12 inits) |
-
-The pi0.5 policy checkpoint (`pi05_droid`) is an openpi asset under
-`~/.cache/openpi/...` referenced by absolute path in the eval YAMLs.
-
-### Validating a new adapter or change
-
-Re-validate with a **2-init smoke at full duration (25 s)** per WM — short smokes
-miss back-half drift — and eyeball the stacked wrist/exterior band ordering. e.g.:
-
-```bash
-sbatch bash_scripts/eval_wm.sbatch --wm weaver --dataset data/benchmark/0617_smoke
-```
-
----
-
-## Building a test suite
-
-Each test case provides initial observations (left / right / wrist views), the
-initial robot state + gripper, and an optional instruction. Place suites under
-`data/benchmark/<name>` (or `data/evaluation_suites/<name>`) and point the eval
-config's `dataset_path` at it. See [SCENEGEN.md](SCENEGEN.md)
-for the scenegen pipeline that builds initialization suites from an instruction +
-image.
-
-## Reward scoring (optional)
-
-`reward_model: dummy` produces videos only (the default for the above). To score
-with Robometer:
-
-```bash
-git clone https://github.com/robometer/robometer.git external/robometer
-uv sync --extra reward-robometer
-# then set reward_model.name: robometer in the eval YAML
-```
-
-## Running Evaluation
-
-Finally, to generate evaluation videos with reward annotations, run:
-
-```bash
-# Example: openpi
-uv sync --extra policy-openpi --extra reward-robometer
-uv run python scripts/run_evaluation.py \
-  --config configs/evaluation/example_eval_openpi.yaml
-
-# Example: molmoact2 (DROID checkpoint, in-process bf16 load)
-uv sync --extra policy-molmoact2 --extra reward-robometer
-uv run python scripts/run_evaluation.py \
-  --config configs/evaluation/example_eval_molmoact2.yaml
-```
-
-💡 `num_inference_steps` controls diffusion denoising steps (lower = faster,
-higher = better quality). `duration` controls rollout length in seconds.
+</details>
