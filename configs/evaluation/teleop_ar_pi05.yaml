@@ -1,0 +1,48 @@
+# Policy eval on teleop initializations: pi0.5 (pi05_droid) under the
+# autoregressive Wan student (wm_student_2view, 32-step many-step sampler).
+# Driven by the ARWanWorldModel closed-loop adapter.
+world_model:
+  name: ar_wan
+  checkpoint_path: checkpoints/ar_wm/wm_student_2view.pt
+  params:
+    config_path: configs/inference/ar_wan_student_2view.py
+    stats_root: assets/teleop_inits                # stats.json is in the teleop_inits dir
+    vae_dir: external/Wan2.1-T2V-1.3B-Diffusers
+    num_inference_steps: 32          # "slow" student: many-step flow matching (32 steps for undistilled)
+    num_cams: 2                      # 2-view model (1 sampled side + wrist)
+    width: 320
+    height: 192
+    view_order: [exterior_right, wrist]  # 2-view: one side camera + wrist
+    debug: true
+    debug_log_limit: 4
+policy:
+  name: openpi
+  checkpoint_path: /home/yy4041/.cache/openpi/openpi-assets/checkpoints/pi05_droid
+  params:
+    config_name: pi05_droid
+    repo_path: external/openpi
+    pytorch_device: cuda
+    debug: false
+    debug_log_limit: 3
+    exterior_view_name: exterior_right
+    wrist_view_name: wrist
+    stacked_view_order:
+    - exterior_right
+    - wrist
+    resize_height: 224
+    resize_width: 224
+    joint_position_dim: 7
+    action_adapter_checkpoint_path: checkpoints/action_adapter/model2_15_9.pth
+    action_adapter_gripper_max: 0.9
+    intermediate_resize_height: 180
+    policy_skip_step: 2
+    num_action_steps: 5
+reward_model:
+  name: dummy
+  params: {}
+scheduler:
+  chunk_size: 8
+duration: 25                         # 25 seconds per rollout
+action_hz: 5                         # 5 Hz action frequency
+dataset_path: assets/teleop_inits   # Use teleop initializations
+video_dir: outputs/teleop_ar_pi05   # Output directory
